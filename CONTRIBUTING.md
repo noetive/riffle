@@ -11,7 +11,7 @@ go test -count=1 -tags integration ./...
 
 The integration tests drive a real browser and need Google Chrome (or Chromium) installed. Without the `integration` tag they are not compiled. `make lint` needs [golangci-lint](https://golangci-lint.run) v2.
 
-`make build` and `make test` also enable the repository's git hooks. Before each commit the hook checks staged files for credentials, then runs gofmt, golangci-lint, the unit tests and `govulncheck` when Go files changed. A tool you don't have is named and skipped; CI runs all of it either way. Please don't bypass the hook.
+`make build` and `make test` also enable the repository's git hooks. Before each commit the hook checks staged files for credentials and formats them: Go with gofmt, the installer's JavaScript with Biome. A file whose every change is staged is fixed and staged again; one with unstaged changes too is left alone and the commit refused. It then runs golangci-lint, the unit tests and `govulncheck` when Go files changed, shellcheck on shell scripts, and the installer tests when `installer/` changed. A tool you don't have is named and skipped; CI runs all of it either way. Please don't bypass the hook.
 
 The installer is a Node package in `installer/`. It needs Node 22 or newer:
 

@@ -51,6 +51,11 @@ jobs:
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
+      # The pre-commit hook skips shellcheck where it is not installed; the
+      # runner image has it.
+      - name: shellcheck
+        run: shellcheck .githooks/*
+
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.14.0
@@ -116,6 +121,12 @@ jobs:
 
       - if: steps.present.outputs.found == 'true'
         run: npm ci
+        working-directory: installer
+
+      # Formatting and lint, as the pre-commit hook applies them. `biome ci`
+      # never writes: a file the hook would have reformatted fails here.
+      - if: steps.present.outputs.found == 'true'
+        run: npx biome ci .
         working-directory: installer
 
       - if: steps.present.outputs.found == 'true'

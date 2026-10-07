@@ -10,6 +10,10 @@
 #
 # A missing tool is announced and never silently skipped: a check that quietly
 # stopped running is indistinguishable from one that passes. CI runs them all.
+#
+# Formatting is fixed, not refused, for a file whose every change is staged:
+# the hook rewrites it and stages it again. A file with unstaged changes too is
+# left alone and refused, because staging it would commit what was left out.
 
 fail=0
 
@@ -17,11 +21,34 @@ skip() {
 	printf 'pre-commit: SKIPPED %s: %s. CI runs it regardless.\n' "$1" "$2" >&2
 }
 
+# whole reports whether every change to the file is staged, so rewriting it and
+# staging it again adds nothing its author left out.
+whole() { git diff --quiet -- "$1"; }
+
+# formatted stages a file the hook rewrote and says so. `git commit <path>`
+# commits from an index of its own and leaves the usual one as it was, so there
+# the rewrite is staged by hand afterwards.
+formatted() {
+	git add -- "$1" || return
+	case "$GIT_INDEX_FILE" in
+	*next-index*) printf 'pre-commit: formatted %s; after this commit, run: git add %s\n' "$1" "$1" >&2 ;;
+	*) printf 'pre-commit: formatted %s\n' "$1" >&2 ;;
+	esac
+}
+
 # core.quotePath=false so a non-ASCII path is not rendered as an escaped,
 # quoted string that matches no pattern below. ACMR includes renames, which is
 # how a file arrives at a name the credential globs match.
 staged=$(git -c core.quotePath=false diff --cached --name-only --diff-filter=ACMR)
 [ -n "$staged" ] || exit 0
+
+# A name holding a quote, tab or newline is printed quoted all the same, and
+# would slip past every check below that reads paths, credentials included.
+quoted=$(printf '%s\n' "$staged" | grep '^"' || true)
+if [ -n "$quoted" ]; then
+	printf 'pre-commit: these names hold a quote, tab or newline, which the checks cannot read; rename them:\n%s\n' "$quoted" >&2
+	fail=1
+fi
 
 # --- credentials, by path ---------------------------------------------------
 while IFS= read -r path; do
@@ -54,13 +81,20 @@ go_changed=$(printf '%s\n' "$staged" | grep -E '\.go$|^go\.(mod|sum)$|^\.golangc
 if [ -n "$go_changed" ]; then
 	if command -v gofmt >/dev/null 2>&1; then
 		files=$(printf '%s\n' "$staged" | grep -E '\.go$' || true)
-		unformatted=''
-		if [ -n "$files" ]; then
-			# shellcheck disable=SC2086
-			unformatted=$(printf '%s\n' "$files" | while IFS= read -r f; do [ -f "$f" ] && gofmt -l "$f"; done)
-		fi
-		if [ -n "$unformatted" ]; then
-			printf 'pre-commit: gofmt would change:\n%s\nrun: gofmt -w <file>\n' "$unformatted" >&2
+		left=''
+		while IFS= read -r f; do
+			[ -n "$f" ] && [ -f "$f" ] && [ -n "$(gofmt -l "$f")" ] || continue
+			if whole "$f"; then
+				gofmt -w "$f" && formatted "$f"
+			else
+				left="$left$f
+"
+			fi
+		done <<FILES
+$files
+FILES
+		if [ -n "$left" ]; then
+			printf 'pre-commit: gofmt would change these, which also have unstaged changes, so they were left alone:\n%srun: gofmt -w <file>, then stage it\n' "$left" >&2
 			fail=1
 		fi
 	else
@@ -93,6 +127,46 @@ if [ -n "$go_changed" ]; then
 		;;
 	*) skip govulncheck 'it could not run (offline, or the tool could not be fetched)' ;;
 	esac
+fi
+
+# --- installer JavaScript ---------------------------------------------------
+# Biome formats and applies its safe fixes; what it cannot fix refuses the
+# commit. The lockfile is npm's to write.
+js=$(printf '%s\n' "$staged" | grep -E '^installer/.*\.(js|mjs|cjs|json)$' | grep -v '^installer/package-lock\.json$' || true)
+if [ -n "$js" ]; then
+	if [ -x installer/node_modules/.bin/biome ]; then
+		while IFS= read -r f; do
+			[ -n "$f" ] && [ -f "$f" ] || continue
+			rel=${f#installer/}
+			if whole "$f"; then
+				(cd installer && ./node_modules/.bin/biome check --write --no-errors-on-unmatched "$rel" >/dev/null 2>&1)
+				whole "$f" || formatted "$f"
+			fi
+			(cd installer && ./node_modules/.bin/biome check --no-errors-on-unmatched "$rel") || {
+				whole "$f" || printf 'pre-commit: %s also has unstaged changes, so it was left alone; run: cd installer && npm run fix, then stage it\n' "$f" >&2
+				fail=1
+			}
+		done <<FILES
+$js
+FILES
+	else
+		skip Biome 'installer/node_modules is not installed (run: cd installer && npm ci)'
+	fi
+fi
+
+# --- shell scripts ----------------------------------------------------------
+sh=$(printf '%s\n' "$staged" | grep -E '^\.githooks/|\.sh$' || true)
+if [ -n "$sh" ]; then
+	if command -v shellcheck >/dev/null 2>&1; then
+		while IFS= read -r f; do
+			[ -n "$f" ] && [ -f "$f" ] || continue
+			shellcheck "$f" || fail=1
+		done <<FILES
+$sh
+FILES
+	else
+		skip shellcheck 'shellcheck is not installed'
+	fi
 fi
 
 # --- installer --------------------------------------------------------------
