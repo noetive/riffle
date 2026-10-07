@@ -83,7 +83,9 @@ if [ -n "$go_changed" ]; then
 		files=$(printf '%s\n' "$staged" | grep -E '\.go$' || true)
 		left=''
 		while IFS= read -r f; do
-			[ -n "$f" ] && [ -f "$f" ] && [ -n "$(gofmt -l "$f")" ] || continue
+			[ -n "$f" ] || continue
+			[ -f "$f" ] || continue
+			[ -n "$(gofmt -l "$f")" ] || continue
 			if whole "$f"; then
 				gofmt -w "$f" && formatted "$f"
 			else
@@ -136,7 +138,8 @@ js=$(printf '%s\n' "$staged" | grep -E '^installer/.*\.(js|mjs|cjs|json)$' | gre
 if [ -n "$js" ]; then
 	if [ -x installer/node_modules/.bin/biome ]; then
 		while IFS= read -r f; do
-			[ -n "$f" ] && [ -f "$f" ] || continue
+			[ -n "$f" ] || continue
+			[ -f "$f" ] || continue
 			rel=${f#installer/}
 			if whole "$f"; then
 				(cd installer && ./node_modules/.bin/biome check --write --no-errors-on-unmatched "$rel" >/dev/null 2>&1)
@@ -159,7 +162,8 @@ sh=$(printf '%s\n' "$staged" | grep -E '^\.githooks/|\.sh$' || true)
 if [ -n "$sh" ]; then
 	if command -v shellcheck >/dev/null 2>&1; then
 		while IFS= read -r f; do
-			[ -n "$f" ] && [ -f "$f" ] || continue
+			[ -n "$f" ] || continue
+			[ -f "$f" ] || continue
 			shellcheck "$f" || fail=1
 		done <<FILES
 $sh
