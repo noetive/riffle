@@ -1,0 +1,30 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.noetive/riffle",
+  "title": "Riffle",
+  "description": "A browser your agent can read: several steps per call, only what changed comes back.",
+  "repository": {
+    "url": "https://github.com/noetive/riffle",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "websiteUrl": "https://noetive.io/riffle",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@noetive/riffle",
+      "version": "0.1.0",
+      "runtimeHint": "npx",
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ],
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

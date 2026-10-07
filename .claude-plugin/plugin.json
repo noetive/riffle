@@ -1,0 +1,32 @@
+{
+  "author": {
+    "name": "Noetive.io",
+    "url": "https://noetive.io"
+  },
+  "description": "A browser your agent can read: several steps per call, only what changed comes back.",
+  "displayName": "Riffle",
+  "homepage": "https://noetive.io/riffle",
+  "keywords": [
+    "riffle",
+    "browser",
+    "mcp",
+    "web automation",
+    "testing",
+    "scraping"
+  ],
+  "license": "ISC",
+  "mcpServers": {
+    "riffle": {
+      "args": [
+        "-y",
+        "@noetive/riffle",
+        "mcp"
+      ],
+      "command": "npx"
+    }
+  },
+  "name": "riffle",
+  "repository": "https://github.com/noetive/riffle",
+  "skills": "./installer/skills",
+  "version": "0.1.0"
+}

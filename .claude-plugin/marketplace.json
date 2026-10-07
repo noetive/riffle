@@ -1,0 +1,30 @@
+{
+  "metadata": {
+    "description": "A browser your agent can read: several steps per call, only what changed comes back."
+  },
+  "name": "riffle",
+  "owner": {
+    "name": "Noetive.io"
+  },
+  "plugins": [
+    {
+      "author": {
+        "name": "Noetive.io"
+      },
+      "category": "development",
+      "description": "A browser your agent can read: several steps per call, only what changed comes back.",
+      "keywords": [
+        "riffle",
+        "browser",
+        "mcp",
+        "web automation",
+        "testing",
+        "scraping"
+      ],
+      "license": "ISC",
+      "name": "riffle",
+      "repository": "https://github.com/noetive/riffle",
+      "source": "./"
+    }
+  ]
+}

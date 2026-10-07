@@ -1,0 +1,45 @@
+version: 2
+
+updates:
+  # Keeps the commit pins in the workflows from rotting. A stale pin is the
+  # class of change nobody notices by reading.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore
+    open-pull-requests-limit: 5
+    groups:
+      go:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /installer
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore
+    open-pull-requests-limit: 5
+    groups:
+      installer:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    ignore:
+      # Riffle's own output. The release pins them to the tag, so a bot bump
+      # would only fail the version check.
+      - dependency-name: "@noetive/riffle-*"

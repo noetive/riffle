@@ -1,0 +1,113 @@
+#!/bin/sh
+# Runs before every commit: credentials, formatting, lint, unit tests and
+# vulnerabilities. It is slower than a filter should be, on purpose: nothing
+# reaches history, and a public repository's history cannot be rewritten after
+# a push. A hook you bypass with --no-verify enforces nothing, so if it feels
+# too slow, make the check faster rather than skipping it.
+#
+# No `set -e`: every check runs even after one fails, so a bad commit costs one
+# round of fixes instead of five.
+#
+# A missing tool is announced and never silently skipped: a check that quietly
+# stopped running is indistinguishable from one that passes. CI runs them all.
+
+fail=0
+
+skip() {
+	printf 'pre-commit: SKIPPED %s: %s. CI runs it regardless.\n' "$1" "$2" >&2
+}
+
+# core.quotePath=false so a non-ASCII path is not rendered as an escaped,
+# quoted string that matches no pattern below. ACMR includes renames, which is
+# how a file arrives at a name the credential globs match.
+staged=$(git -c core.quotePath=false diff --cached --name-only --diff-filter=ACMR)
+[ -n "$staged" ] || exit 0
+
+# --- credentials, by path ---------------------------------------------------
+while IFS= read -r path; do
+	case "$path" in
+	.env | .envrc.local | */.env | */.envrc.local | *.pem | *.key | *_rsa | *_ed25519)
+		printf 'pre-commit: %s is a credential file and never belongs in a commit.\n' "$path" >&2
+		fail=1
+		;;
+	esac
+done <<STAGED
+$staged
+STAGED
+
+# --- credentials, by content ------------------------------------------------
+# A few precise patterns, not a scanner: a hook that cries wolf trains the
+# --no-verify reflex.
+leaked=$(git diff --cached -U0 --diff-filter=ACMR |
+	grep '^+' |
+	grep -Ea -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' -e 'ghp_[A-Za-z0-9]{36}' -e 'github_pat_[A-Za-z0-9_]{22,}' -e 'npm_[A-Za-z0-9]{36}' -e 'AKIA[0-9A-Z]{16}')
+if [ -n "$leaked" ]; then
+	printf 'pre-commit: staged content matches a live credential:\n%s\n' "$leaked" >&2
+	fail=1
+fi
+
+# --- Go checks --------------------------------------------------------------
+# They read the working tree, not the index. Closing that gap needs
+# `git stash --keep-index`, which can eat work when the hook is interrupted, a
+# worse trade than the hole it fills.
+go_changed=$(printf '%s\n' "$staged" | grep -E '\.go$|^go\.(mod|sum)$|^\.golangci\.yml$' || true)
+if [ -n "$go_changed" ]; then
+	if command -v gofmt >/dev/null 2>&1; then
+		files=$(printf '%s\n' "$staged" | grep -E '\.go$' || true)
+		unformatted=''
+		if [ -n "$files" ]; then
+			# shellcheck disable=SC2086
+			unformatted=$(printf '%s\n' "$files" | while IFS= read -r f; do [ -f "$f" ] && gofmt -l "$f"; done)
+		fi
+		if [ -n "$unformatted" ]; then
+			printf 'pre-commit: gofmt would change:\n%s\nrun: gofmt -w <file>\n' "$unformatted" >&2
+			fail=1
+		fi
+	else
+		skip gofmt 'gofmt is not installed'
+	fi
+
+	if command -v golangci-lint >/dev/null 2>&1; then
+		golangci-lint run ./... || {
+			printf 'pre-commit: golangci-lint found problems.\n' >&2
+			fail=1
+		}
+	else
+		skip golangci-lint 'golangci-lint is not installed'
+	fi
+
+	go test -count=1 ./... || {
+		printf 'pre-commit: unit tests failed.\n' >&2
+		fail=1
+	}
+
+	# govulncheck exits 3 when it finds a vulnerability that affects this code.
+	# Any other failure (no network, the tool could not be fetched) says nothing
+	# about the code, so it is reported as a skip rather than a failure.
+	go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+	case $? in
+	0) ;;
+	3)
+		printf 'pre-commit: govulncheck found a vulnerability that affects this code.\n' >&2
+		fail=1
+		;;
+	*) skip govulncheck 'it could not run (offline, or the tool could not be fetched)' ;;
+	esac
+fi
+
+# --- installer --------------------------------------------------------------
+if printf '%s\n' "$staged" | grep -q '^installer/'; then
+	if command -v npm >/dev/null 2>&1 && [ -d installer/node_modules ]; then
+		(cd installer && npm test --silent) || {
+			printf 'pre-commit: installer tests failed.\n' >&2
+			fail=1
+		}
+	else
+		skip 'installer tests' 'npm is missing or installer/node_modules is not installed (run: cd installer && npm ci)'
+	fi
+fi
+
+[ "$fail" -eq 0 ] || {
+	printf 'pre-commit: commit refused. Fix the above, do not bypass it.\n' >&2
+	exit 1
+}

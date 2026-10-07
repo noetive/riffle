@@ -1,0 +1,54 @@
+name: Bug
+description: Riffle did something other than what it says.
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "Output of `riffle version`"
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: OS and architecture
+      description: e.g. macOS 15 arm64, Windows 11 x64, Ubuntu 24.04 x64
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `riffle doctor`
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: program
+    attributes:
+      label: The program that failed
+      description: The exact program or tool call you sent to Riffle, and the page it ran against if it is public.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened
+      description: The output you got, in full.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: redacted
+    attributes:
+      # Credentials get pasted into issues constantly, and one in a public issue
+      # is one that has to be rotated. Asking once, here, is cheaper than rotating.
+      label: Before submitting
+      options:
+        - label: There is no password, token, cookie or other secret in the text above.
+          required: true

@@ -1,0 +1,15 @@
+# Auto-requests review; it gates nothing until "Require review from Code Owners"
+# is enabled on the main ruleset.
+*                       @gurre
+
+# The release path holds the npm and MCP registry publish credentials. A change
+# here can publish, and a publish cannot be undone.
+/.github/workflows/     @gurre
+/.goreleaser.yaml       @gurre
+/server.json            @gurre
+/scripts/               @gurre
+/installer/             @gurre
+
+# Secret handling and the navigation and upload policy are the security boundary.
+/SECURITY.md            @gurre
+/internal/daemon/       @gurre

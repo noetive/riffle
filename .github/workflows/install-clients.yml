@@ -1,0 +1,155 @@
+name: install-clients
+
+# The installer's unit tests run against temporary directories, so they prove
+# the merge logic, not that a real editor reads what it writes. These jobs run
+# the installer from this checkout against each supported editor's config
+# layout, read the file back, and where an editor ships a CLI, install it and
+# ask it whether it sees the server.
+#
+# Deliberately not on every pull request. It downloads third-party CLIs whose
+# availability this repository does not control, and a red build caused by
+# somebody else's npm outage on a change that touched the README teaches people
+# to ignore the colour. It runs where it can be about this code: changes to the
+# installer, plus weekly and on demand.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "installer/**"
+      - ".github/scripts/assert-entry.mjs"
+      - ".github/workflows/install-clients.yml"
+  pull_request:
+    paths:
+      - "installer/**"
+      - ".github/scripts/assert-entry.mjs"
+      - ".github/workflows/install-clients.yml"
+  schedule:
+    # Weekly. The editors move without this repository changing.
+    - cron: "41 5 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: install-clients-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # One job per install strategy rather than per editor. Every editor here
+  # merges a JSON file, so the file-merge entries share a shape and differ in
+  # path and top-level key. An editor with a different shape deserves its own
+  # job.
+  install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # file-merge: no third-party binary. The editor never runs; what is
+          # under test is the file this installer writes for it to read.
+          - client: cursor
+            config: .cursor/mcp.json
+            key: mcpServers
+          - client: kiro
+            config: .kiro/settings/mcp.json
+            key: mcpServers
+          - client: antigravity
+            config: .gemini/config/mcp_config.json
+            key: mcpServers
+
+          # Project scope only: the config lives in the workspace, so the path
+          # is relative to the scratch workspace and not to HOME.
+          - client: copilot
+            config: work/.vscode/mcp.json
+            key: servers
+
+          # file-merge, and the real CLI is installed too, so the entry is
+          # checked by the program that is supposed to read it.
+          - client: claude-code
+            install_cli: npm install -g @anthropic-ai/claude-code
+            probe: claude --version
+            config: .claude.json
+            key: mcpServers
+            ask: claude mcp get riffle
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: installer/package-lock.json
+
+      # --ignore-scripts skips the postinstall that fetches the native binary;
+      # init and remove only write config files.
+      - run: npm ci --ignore-scripts
+        working-directory: installer
+
+      - name: Install ${{ matrix.client }}'s CLI
+        if: matrix.install_cli != ''
+        run: ${{ matrix.install_cli }}
+
+      # Asserted before the install rather than assumed by it, so a missing CLI
+      # fails here and not as a confusing readback failure later.
+      - name: The CLI is on PATH
+        if: matrix.probe != ''
+        run: ${{ matrix.probe }}
+
+      # A scratch HOME and workspace, because these commands write per-user
+      # config and a runner's home is shared with whatever else the job did.
+      # The config is seeded with an unrelated server and an unrelated key that
+      # the installer has to leave alone.
+      - name: Seed a config with unrelated content
+        run: |
+          SCRATCH_HOME="$RUNNER_TEMP/home-${{ matrix.client }}"
+          mkdir -p "$SCRATCH_HOME/work"
+          echo "SCRATCH_HOME=$SCRATCH_HOME" >> "$GITHUB_ENV"
+          config="$SCRATCH_HOME/${{ matrix.config }}"
+          mkdir -p "$(dirname "$config")"
+          jq -n --arg key "${{ matrix.key }}" \
+            '{unrelated: true} + {($key): {other: {command: "echo", args: ["unrelated"]}}}' > "$config"
+
+      - name: Install into ${{ matrix.client }}
+        run: |
+          cd "$SCRATCH_HOME/work"
+          HOME="$SCRATCH_HOME" node "$GITHUB_WORKSPACE/installer/bin/riffle.js" init \
+            --client ${{ matrix.client }} --yes
+
+      # Read back from the file the editor reads, not from what the installer
+      # said it did.
+      - name: The entry is in the config and unrelated entries survived
+        run: node .github/scripts/assert-entry.mjs "$SCRATCH_HOME/${{ matrix.config }}" "${{ matrix.key }}" present
+
+      - name: The editor's own CLI sees the server
+        if: matrix.ask != ''
+        run: |
+          cd "$SCRATCH_HOME/work"
+          output=$(HOME="$SCRATCH_HOME" ${{ matrix.ask }} 2>&1) || { echo "$output"; exit 1; }
+          echo "$output"
+          case "$output" in
+            *npx*) ;;
+            *) echo "::error::the CLI did not report the npx command" >&2; exit 1 ;;
+          esac
+
+      - name: A second install changes nothing
+        run: |
+          cd "$SCRATCH_HOME/work"
+          before=$(sha256sum "$SCRATCH_HOME/${{ matrix.config }}")
+          HOME="$SCRATCH_HOME" node "$GITHUB_WORKSPACE/installer/bin/riffle.js" init \
+            --client ${{ matrix.client }} --yes
+          after=$(sha256sum "$SCRATCH_HOME/${{ matrix.config }}")
+          if [ "$before" != "$after" ]; then
+            echo "::error::a second init rewrote the config" >&2
+            exit 1
+          fi
+          node "$GITHUB_WORKSPACE/.github/scripts/assert-entry.mjs" "$SCRATCH_HOME/${{ matrix.config }}" "${{ matrix.key }}" present
+
+      - name: Remove takes it out again and leaves the rest
+        run: |
+          cd "$SCRATCH_HOME/work"
+          HOME="$SCRATCH_HOME" node "$GITHUB_WORKSPACE/installer/bin/riffle.js" remove \
+            --client ${{ matrix.client }}
+          node "$GITHUB_WORKSPACE/.github/scripts/assert-entry.mjs" "$SCRATCH_HOME/${{ matrix.config }}" "${{ matrix.key }}" absent

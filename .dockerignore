@@ -1,0 +1,33 @@
+# The build stage does `COPY . .`, so everything not excluded here is sent to the
+# daemon and lands in an intermediate layer.
+
+.git
+.github
+
+# Credentials. `**/` on each: docker matches with filepath.Match, where `*` does
+# not cross a `/`, so a bare `*.pem` covers the root and nothing else.
+**/.env
+**/.env.*
+**/.envrc
+**/.envrc.local
+**/*.pem
+**/*.key
+
+# The npm wrapper is a separate artifact; the image runs the Go binary directly.
+installer/
+scripts/
+docs/
+
+# Build output, from here or from a previous run.
+dist/
+bin/
+**/*.test
+**/*.out
+
+# Editor and agent state.
+.claude/
+.vscode/
+.idea/
+.DS_Store
+
+*.md

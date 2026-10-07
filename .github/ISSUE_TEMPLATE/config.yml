@@ -1,0 +1,10 @@
+blank_issues_enabled: false
+
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/noetive/riffle/security/advisories/new
+    about: Do not open a public issue, and do not paste a secret. See SECURITY.md.
+
+  - name: Questions and usage
+    url: https://noetive.io/riffle
+    about: Install and usage documentation.

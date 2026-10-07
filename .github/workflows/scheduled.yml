@@ -1,0 +1,138 @@
+name: scheduled
+
+on:
+  # Daily: the advisory database and the dependency graph both move without this
+  # repository changing, and both failures are invisible until someone looks.
+  schedule:
+    - cron: "17 6 * * *"
+    # Weekly: a real fuzz campaign. Daily would re-search ground the last one
+    # already covered: a short search converges long before morning.
+    - cron: "41 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scheduled
+  cancel-in-progress: false
+
+# github.event.schedule is empty on workflow_dispatch, so a manual run executes
+# every job, which is what you want when you are here because something looks
+# wrong.
+jobs:
+  vulnerabilities:
+    if: github.event.schedule != '41 4 * * 1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The pull request check answers "did this change introduce one". This
+      # answers "did one get published against code that has not changed", which
+      # is the more common way a dependency becomes a liability.
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: installer/package-lock.json
+
+      - run: npm ci --ignore-scripts
+        working-directory: installer
+
+      # Runtime tree only: a devDependency advisory cannot reach a user of the
+      # published package, whose files list is bin/, src/, skills/ and postinstall.js.
+      - run: npm audit --omit=dev --audit-level=high
+        working-directory: installer
+
+  fuzz:
+    if: github.event.schedule != '17 6 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Go keeps interesting inputs in the build cache rather than in the
+      # repository, so without this every campaign restarts from the seeds and
+      # re-covers ground the last one already covered.
+      #
+      # restore and save split apart, because actions/cache only saves when the
+      # job succeeds, which would throw away the corpus of the one run that
+      # actually found something.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/go-build/fuzz
+          key: fuzz-${{ github.run_id }}
+          restore-keys: fuzz-
+
+      # Five minutes each against the accumulated corpus. A crasher is written to
+      # that package's testdata/fuzz: commit it as a seed alongside the fix.
+      # Fuzz targets are listed per package because -fuzz accepts one package and one target per run.
+      - name: Fuzz campaign
+        run: |
+          ran=0
+          for pkg in $(go list ./...); do
+            listing=$(go test -list '^Fuzz' "$pkg") || exit 1
+            targets=$(printf '%s\n' "$listing" | grep '^Fuzz' || true)
+            for target in $targets; do
+              ran=1
+              go test -run "^$" -fuzz "^${target}$" -fuzztime 5m "$pkg"
+            done
+          done
+          test "$ran" -eq 1
+
+      - if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/go-build/fuzz
+          key: fuzz-${{ github.run_id }}
+
+      - if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: crashers
+          path: internal/*/testdata/fuzz/
+
+  report:
+    needs: [vulnerabilities, fuzz]
+    if: always() && contains(needs.*.result, 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      # A scheduled failure turns no pull request red and mails no author. An
+      # issue is the only artefact anyone will see.
+      #
+      # One open issue at a time, commented on rather than reopened: a failure
+      # that persists is one problem, and a week of it should not be seven
+      # issues. The label is the identity, so the title can carry the date.
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" \
+            --label scheduled-failure --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "Failed again: $run_url"
+          else
+            gh label create scheduled-failure --repo "$GITHUB_REPOSITORY" \
+              --description "A scheduled check is failing" --color B60205 2>/dev/null || true
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --label scheduled-failure \
+              --title "Scheduled checks failed on $(date -u +%F)" \
+              --body "$run_url"
+          fi

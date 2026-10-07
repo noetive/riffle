@@ -1,0 +1,44 @@
+name: Page reads wrong
+description: The view Riffle returned for a page does not match what the page shows.
+labels: [view]
+body:
+  - type: input
+    id: url
+    attributes:
+      label: URL
+      description: A public URL that shows the problem. If the page needs a login, describe it instead and do not paste credentials.
+    validations:
+      required: true
+
+  - type: textarea
+    id: view
+    attributes:
+      label: The view output
+      description: What Riffle returned for the page, in full.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: What the page shows that the view left out, got wrong, or described differently.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "Output of `riffle version`"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: redacted
+    attributes:
+      label: Before submitting
+      options:
+        - label: The view output contains no personal data, session token or other secret.
+          required: true

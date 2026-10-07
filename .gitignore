@@ -1,0 +1,28 @@
+# Binaries
+/riffle
+/bin/
+*.test
+*.out
+
+# Environment and secrets
+.env
+.env.*
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+
+# Claude Code local state
+.claude/settings.local.json
+
+docs/
+# Local environment
+.envrc.local
+
+# Maintainer-local files
+.mcp.json
+.envrc
+.gitignore copy
+dist/
+CLAUDE.md

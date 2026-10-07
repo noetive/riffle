@@ -1,0 +1,421 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Read by default; the jobs that need more say so themselves. Inverted
+# deliberately: with the grants at the top, the next job added inherits write
+# on repository contents without anyone deciding it should.
+permissions:
+  contents: read
+
+# Workflow-wide, not per-tag: two tags in flight at once race on npm's latest
+# dist-tag, and the loser silently becomes what `npx` installs.
+#
+# cancel-in-progress: false keeps a running release from being killed between
+# the platform packages and the wrapper, which would leave a published version
+# resolving to nothing. Push release tags one at a time, and re-run from the
+# Actions tab if one is cancelled while queued.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      # goreleaser creates the release and uploads to it.
+      contents: write
+      # Both needed for keyless signing and build provenance: the workflow proves
+      # its own identity with an OIDC token instead of holding a signing key.
+      id-token: write
+      attestations: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      npm_tag: ${{ steps.version.outputs.npm_tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # The tag is the only version input: ldflags, both npm manifests and
+      # server.json are all stamped from it. A malformed tag has to stop here: a
+      # GitHub Release cannot be unpublished cleanly and an npm version cannot
+      # be reused at all.
+      - id: version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z_.]+)?$' || {
+            echo "tag ${GITHUB_REF_NAME} is not a semver release tag" >&2
+            exit 1
+          }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          # npm assigns the `latest` dist-tag to any publish that does not name
+          # one; it infers nothing from the version string. Without this a
+          # prerelease becomes what every bare `npx @noetive/riffle` installs.
+          if [ "$version" = "${version%%-*}" ]; then
+            echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "npm_tag=next" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          # Pinned like golangci-lint in ci.yml: with `latest`, the tool that
+          # produces the signed artifacts can change between two runs of the same
+          # tag, and a release nobody can reproduce is not a release.
+          version: v2.17.1
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Attests that these exact bytes came from this workflow at this commit,
+      # which lets a consumer tell a real release from a look-alike uploaded by
+      # someone with repository write access. Attestation is keyed by digest, so
+      # attesting the build output covers the renamed release assets too.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*/riffle
+            dist/*/riffle.exe
+            dist/*.tar.gz
+            dist/*.zip
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: binaries
+          path: dist/
+
+  npm:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: installer/package-lock.json
+
+      # Trusted publishing needs npm 11.5.1 or later. Node 22 still bundles
+      # npm 10, which does not know how to exchange an OIDC token and would fall
+      # silently through to token auth. Pinned rather than @latest so a bad npm
+      # release cannot break a release of this.
+      - run: npm install -g npm@11.6.2
+
+      # Before anything is built: otherwise the job builds and packs five
+      # binaries before npm reports ENEEDAUTH, by which point the GitHub Release
+      # already exists. Either OIDC (trusted publishing) or a valid token is
+      # enough. It cannot confirm a trusted publisher is configured for each
+      # package, because npm exposes no way to ask.
+      - name: Check the publish credential
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ]; then
+            echo "OIDC is available; npm will attempt trusted publishing."
+            exit 0
+          fi
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error title=No way to authenticate to npm::Configure a trusted publisher for each @noetive/riffle* package on npmjs.com, or add an npm token with publish rights on the @noetive scope as the NPM_TOKEN repository secret."
+            exit 1
+          fi
+          npm whoami || {
+            echo "::error title=NPM_TOKEN is not valid::npm rejected the token. It is set but expired, revoked, or lacks publish rights on the @noetive scope."
+            exit 1
+          }
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: binaries
+          path: dist/
+
+      - run: npm ci --ignore-scripts
+        working-directory: installer
+
+      # Every package carries the same version as the git tag, and the wrapper
+      # pins its platform packages to exactly its own version. A drifting pair
+      # would have a wrapper resolving a binary built from different source.
+      - name: Stamp versions
+        run: node scripts/stamp-version.js "${{ needs.release.outputs.version }}"
+
+      - name: Build platform packages
+        run: node scripts/build-platform-packages.js "${{ needs.release.outputs.version }}"
+
+      # Platform packages first: the wrapper declares them as optionalDependencies,
+      # and npm skips an optional dependency it cannot resolve without erroring.
+      # A wrapper published ahead of them installs cleanly and finds no binary,
+      # and npm will not let that version be replaced.
+      #
+      # Already-published versions are skipped rather than retried: npm versions
+      # are immutable, so a re-run after a partial publish has no other way
+      # forward.
+      - name: Publish platform packages
+        run: |
+          handled=0
+          for dir in dist/npm/*/; do
+            name=$(node -p "require('./$dir/package.json').name")
+            if npm view "$name@$VERSION" version --prefer-online >/dev/null 2>&1; then
+              echo "$name@$VERSION is already published; skipping."
+            else
+              npm publish --provenance --access public --tag "$NPM_TAG" "$dir"
+            fi
+            handled=$((handled + 1))
+          done
+          if [ "$handled" -ne 5 ]; then
+            echo "::error title=Wrong number of platform packages::Expected 5, found $handled in dist/npm/. The wrapper pins all five, so publishing it now would ship one that cannot resolve on some platform."
+            exit 1
+          fi
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          NPM_TAG: ${{ needs.release.outputs.npm_tag }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # The gate before the one irreversible step in this job. Retried because
+      # the registry is only eventually read-your-writes.
+      - name: Every platform package resolves
+        run: |
+          for dir in dist/npm/*/; do
+            name=$(node -p "require('./$dir/package.json').name")
+            found=''
+            for _ in $(seq 1 10); do
+              if npm view "$name@$VERSION" version --prefer-online >/dev/null 2>&1; then
+                found=1
+                break
+              fi
+              sleep 10
+            done
+            if [ -z "$found" ]; then
+              echo "::error title=Platform package missing::$name@$VERSION is not on the registry. Refusing to publish the wrapper, which would install cleanly and then find no binary on that platform."
+              exit 1
+            fi
+            echo "$name@$VERSION resolves."
+          done
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+
+      - name: Publish wrapper
+        run: |
+          if npm view "@noetive/riffle@$VERSION" version --prefer-online >/dev/null 2>&1; then
+            echo "@noetive/riffle@$VERSION is already published; skipping."
+            exit 0
+          fi
+          npm publish --provenance --access public --tag "$NPM_TAG"
+        working-directory: installer
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          NPM_TAG: ${{ needs.release.outputs.npm_tag }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # Proves goreleaser stamped the binary correctly, the right binary landed in
+  # the right platform package, that package published, and the wrapper resolved
+  # it. Gating the registry on this is the point: an npm mistake is recoverable
+  # with a patch bump, a registry entry advertising a broken version is not.
+  smoke:
+    needs: [release, npm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      # --ignore-scripts disables the postinstall download, so this can only pass
+      # if the platform package for this host published and the wrapper resolved
+      # it. --prefer-online on every registry read is what makes retrying mean
+      # anything: npm otherwise answers from a cached packument that may predate
+      # the publish.
+      - name: The published package installs and reports the released version
+        shell: bash
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          # First: does this host's edge serve the wrapper at all? Asked
+          # separately so "not propagated yet" is never reported as a broken
+          # binary.
+          for _ in $(seq 1 20); do
+            if npm view "@noetive/riffle@${VERSION}" version --prefer-online >/dev/null 2>&1; then
+              served=1
+              break
+            fi
+            echo "registry has not served ${VERSION} to this host yet; retrying" >&2
+            sleep 15
+          done
+          if [ -z "${served:-}" ]; then
+            echo "::error title=Wrapper never propagated::@noetive/riffle@${VERSION} did not resolve on this host within five minutes of publish, with cache revalidation forced." >&2
+            exit 1
+          fi
+
+          # Then: install and assert together, still retried. npm treats
+          # optionalDependencies as best-effort, so a platform package that has
+          # not reached this edge yet leaves `npm install` exiting 0 with no
+          # binary.
+          for _ in $(seq 1 20); do
+            if npm install -g "@noetive/riffle@${VERSION}" --ignore-scripts --prefer-online &&
+              got=$(riffle version 2>&1) &&
+              [ "$got" = "riffle ${VERSION}" ]; then
+              echo "riffle version reports ${got}"
+              exit 0
+            fi
+            echo "wrapper resolves but no working binary yet (last saw '${got:-nothing}'); retrying" >&2
+            got=''
+            sleep 15
+          done
+          echo "::error title=No working binary::@noetive/riffle@${VERSION} resolved but never produced a runnable binary on this host." >&2
+          exit 1
+
+  # Container distribution: a hosted agent runtime runs Riffle and its browser
+  # in an image. Built from source rather than from the release archives: the
+  # Dockerfile cross-compiles, so one buildx invocation produces both
+  # architectures at full speed, and the image stays buildable on its own.
+  oci:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # Pushing to ghcr.io, and signing what was pushed.
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # `latest` only for a final release: a candidate that claims it becomes
+      # what `docker pull` hands someone who never asked for one.
+      - id: tags
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          {
+            echo "tags<<EOF"
+            echo "ghcr.io/noetive/riffle:${VERSION}"
+            case "$VERSION" in
+            *-*) ;;
+            *) echo "ghcr.io/noetive/riffle:latest" ;;
+            esac
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # buildx attestation manifests are off so the multi-arch index holds only
+      # the two images. The provenance is not lost: the attest step below records
+      # it in GitHub's attestation store.
+      - id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          build-args: VERSION=${{ needs.release.outputs.version }}
+          tags: ${{ steps.tags.outputs.tags }}
+
+      # By digest, not by tag: a tag is a mutable pointer, so signing it attests
+      # to whatever it names later rather than to what was built here.
+      - name: Sign the image
+        run: cosign sign --yes "ghcr.io/noetive/riffle@${{ steps.push.outputs.digest }}"
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/noetive/riffle
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: false
+
+  # Last, because the registry validates every package server.json points at:
+  # the npm package must exist and carry a matching mcpName.
+  registry:
+    needs: [release, smoke]
+    # Release tags only. npm can be superseded by the next version; a registry
+    # entry cannot be unpublished, so a prerelease would leave io.noetive/riffle
+    # advertising an RC. A prerelease still exercises every stage before this.
+    if: ${{ !contains(needs.release.outputs.version, '-') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # server.json is read out of this checkout, and the registry records
+      # whatever it is handed, permanently. The restamp costs a second, needs no
+      # state from any other job, and makes this the job you can safely re-run
+      # on its own after a transient registry failure.
+      - name: Stamp versions
+        run: node scripts/stamp-version.js "${{ needs.release.outputs.version }}"
+
+      # Pinned and checked against the checksum published with that release.
+      # `latest/download/` hands the release path a binary nobody chose, while
+      # MCP_REGISTRY_PRIVATE_KEY is in scope for whatever it turns out to be.
+      # Bump the two constants together; a mismatch aborts.
+      - name: Install mcp-publisher
+        env:
+          MCP_PUBLISHER_VERSION: "1.8.1"
+          MCP_PUBLISHER_SHA256: "a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc"
+        run: |
+          base="https://github.com/modelcontextprotocol/registry/releases/download/v${MCP_PUBLISHER_VERSION}"
+          curl -fsSL -o mcp-publisher.tar.gz "${base}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum -c -
+          tar xzf mcp-publisher.tar.gz mcp-publisher
+          chmod +x mcp-publisher
+
+      # The exact request the registry's npm validator makes, so the release
+      # waits on the fact it depends on rather than on a guess.
+      - name: Wait for npm to serve the published version
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          url="https://registry.npmjs.org/@noetive%2Friffle/${VERSION}"
+          for _ in $(seq 1 30); do
+            if [ "$(curl -fsSL "$url" | jq -r '.mcpName // empty')" = "io.noetive/riffle" ]; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "npm did not serve @noetive/riffle@${VERSION} with mcpName io.noetive/riffle within five minutes" >&2
+          exit 1
+
+      # DNS auth, not github-oidc: the registry ties the auth method to the
+      # namespace, and io.noetive/* is the reverse-DNS form of a domain we own.
+      # The key is passed through the environment rather than interpolated into
+      # the run block, so it never appears in the rendered command line.
+      - name: Publish to the MCP registry
+        env:
+          MCP_REGISTRY_PRIVATE_KEY: ${{ secrets.MCP_REGISTRY_PRIVATE_KEY }}
+        run: |
+          if [ -z "$MCP_REGISTRY_PRIVATE_KEY" ]; then
+            echo "MCP_REGISTRY_PRIVATE_KEY is not set; cannot prove ownership of noetive.io." >&2
+            exit 1
+          fi
+          ./mcp-publisher login dns \
+            --domain noetive.io \
+            --private-key "$MCP_REGISTRY_PRIVATE_KEY"
+          ./mcp-publisher publish
