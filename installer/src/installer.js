@@ -2,12 +2,17 @@
 
 const { existsSync, readFileSync, readdirSync, rmSync } = require("node:fs");
 const { join, relative, sep } = require("node:path");
+const { isDeepStrictEqual } = require("node:util");
 
 const { SERVER_NAME, buildEntry, configPath, isInstalled, skillsPath } = require("./clients");
 const configFile = require("./configFile");
 
 function entryAt(target, topLevelKey) {
-  const servers = configFile.parseObject(configFile.read(target), target)[topLevelKey];
+  return entryIn(configFile.parseObject(configFile.read(target), target), topLevelKey);
+}
+
+function entryIn(doc, topLevelKey) {
+  const servers = doc[topLevelKey];
   if (!servers || typeof servers !== "object" || Array.isArray(servers)) return undefined;
   const entry = servers[SERVER_NAME];
   return entry && typeof entry === "object" && !Array.isArray(entry) ? entry : undefined;
@@ -18,9 +23,14 @@ function entryAt(target, topLevelKey) {
 function install(spec, scope, ctx, options = {}) {
   const target = configPath(spec, scope, ctx);
   const before = configFile.read(target);
-  configFile.parseObject(before, target); // a corrupt file is a refusal, not a clobber
+  const doc = configFile.parseObject(before, target); // a corrupt file is a refusal, not a clobber
 
-  const after = configFile.setEntry(before, [spec.topLevelKey, SERVER_NAME], buildEntry(spec, options));
+  // Compared by value: the editor may have saved the file in its own format,
+  // and re-rendering a matching entry would rewrite it for nothing.
+  const wanted = buildEntry(spec, options);
+  if (isDeepStrictEqual(entryIn(doc, spec.topLevelKey), wanted)) return { target, changed: false };
+
+  const after = configFile.setEntry(before, [spec.topLevelKey, SERVER_NAME], wanted);
   if (after === before) return { target, changed: false };
   if (options.dryRun) return { target, changed: true, diff: configFile.diff(before, after, target) };
 

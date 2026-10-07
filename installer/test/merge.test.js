@@ -46,6 +46,23 @@ test("install twice changes nothing the second time", (t) => {
   assert.equal(install(spec, "user", ctx).changed, false);
 });
 
+test("install leaves a matching entry alone however the editor formatted the file", (t) => {
+  const doc = { unrelated: true, mcpServers: { other: { command: "echo" }, riffle: buildEntry(spec) } };
+  const saved = {
+    "no trailing newline": JSON.stringify(doc, null, 2),
+    compact: JSON.stringify(doc),
+    "four spaces": `${JSON.stringify(doc, null, 4)}\n`,
+    "CRLF line ends": `${JSON.stringify(doc, null, 2).replace(/\n/g, "\r\n")}\r\n`,
+  };
+  for (const [style, text] of Object.entries(saved)) {
+    const { ctx } = sandbox(t);
+    put(pathOf(ctx), text);
+    assert.equal(install(spec, "user", ctx).changed, false, style);
+    assert.equal(readFileSync(pathOf(ctx), "utf8"), text, style);
+    assert.equal(existsSync(`${pathOf(ctx)}.riffle.bak`), false, style);
+  }
+});
+
 test("install refuses a corrupt config and leaves it as it was", (t) => {
   const { ctx } = sandbox(t);
   put(pathOf(ctx), "{ not json");
