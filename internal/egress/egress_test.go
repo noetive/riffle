@@ -177,18 +177,6 @@ func TestATunnelCarriesBytesBothWays(t *testing.T) {
 	}
 }
 
-// closedPort is an address nothing listens on.
-func closedPort(t *testing.T) string {
-	t.Helper()
-	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := ln.Addr().String()
-	_ = ln.Close()
-	return addr
-}
-
 func TestAConnectionThatFailsIsKeptWithWhereItWentAndWhy(t *testing.T) {
 	for _, via := range []string{"tunnel", "http"} {
 		t.Run(via, func(t *testing.T) {

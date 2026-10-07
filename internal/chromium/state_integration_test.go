@@ -17,8 +17,10 @@ import (
 )
 
 // A site that signs in with an HttpOnly session cookie, a script cookie that
-// expires later, and a token in localStorage.
-const signedIn = `<!doctype html><title>signed in</title><script>
+// expires later, and a token in localStorage. Its icon is inline: a browser
+// fetches /favicon.ico after a load returns, and that late request would be
+// counted against the restore that follows.
+const signedIn = `<!doctype html><title>signed in</title><link rel="icon" href="data:,"><script>
 document.cookie = "pref=dark; path=/; max-age=3600";
 localStorage.setItem("token", "t-1");
 </script>`

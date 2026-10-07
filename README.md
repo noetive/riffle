@@ -1,10 +1,28 @@
+<div align="center">
+
 # Riffle
 
-**A browser your agent can read.** Several steps per call. Only what changed comes back.
+### A browser your agent can read.
+
+**Several steps per call. Only what changed comes back.**
+
+[![npm](https://img.shields.io/npm/v/@noetive/riffle?style=flat-square&color=cb3837&label=npm)](https://www.npmjs.com/package/@noetive/riffle)
+[![CI](https://img.shields.io/github/actions/workflow/status/noetive/riffle/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/noetive/riffle/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/github/go-mod/go-version/noetive/riffle?style=flat-square&logo=go&logoColor=white&color=00add8)](go.mod)
+[![MCP server](https://img.shields.io/badge/MCP-server-5c4ee5?style=flat-square)](#install)
+[![License: ISC](https://img.shields.io/badge/license-ISC-f4c430?style=flat-square)](LICENSE)
+
+**[Install](#install) · [Use](#use) · [Stay signed in](#stay-signed-in) · [Safe by default](#safe-by-default) · [Releases](https://github.com/noetive/riffle/releases)**
+
+<code>npx @noetive/riffle init</code>
+
+<sub>Claude Code · Cursor · GitHub Copilot · Kiro · Antigravity · any MCP client</sub>
+
+</div>
+
+---
 
 Riffle is an MCP server and CLI that lets an AI agent use real websites without screenshots.
-
-[![ci](https://github.com/noetive/riffle/actions/workflows/ci.yml/badge.svg)](https://github.com/noetive/riffle/actions/workflows/ci.yml)
 
 ## The problem
 
