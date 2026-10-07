@@ -2,6 +2,7 @@ package chromium
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/url"
 	"slices"
@@ -73,8 +74,17 @@ func storageOf(origin string) map[string]any {
 // restore puts the cookies and storage in place. A cookie the browser will not
 // take back is left out: it would be refused again on every start. A site
 // whose storage cannot be put back is skipped and named in what it returns,
-// so one site never keeps the browser from starting.
+// so one site never keeps the browser from starting. Cookies go in last: a
+// request the browser makes of its own while storage is put back, outside the
+// tab's interception, carries none of them.
 func (b *Browser) restore(ctx context.Context, st engine.State) ([]string, error) {
+	var skipped []string
+	if len(st.Storage) > 0 {
+		var err error
+		if skipped, err = b.restoreStorage(ctx, st.Storage); err != nil {
+			return nil, err
+		}
+	}
 	if len(st.Cookies) > 0 {
 		if _, err := b.conn.call(ctx, "", "Storage.setCookies", map[string]any{"cookies": st.Cookies}); err != nil {
 			for _, c := range st.Cookies {
@@ -82,16 +92,13 @@ func (b *Browser) restore(ctx context.Context, st engine.State) ([]string, error
 			}
 		}
 	}
-	if len(st.Storage) == 0 {
-		return nil, nil
-	}
-	return b.restoreStorage(ctx, st.Storage)
+	return skipped, nil
 }
 
 // restoreStorage writes each site's localStorage from a background tab that
 // visits the site. Storage is writable only while a page of the site is
 // open, so the tab opens one, but every request it makes is answered here
-// with an empty page: nothing reaches the site, and no cookie goes with it.
+// with blankPage: nothing reaches the site.
 func (b *Browser) restoreStorage(ctx context.Context, storage map[string][][2]string) (skipped []string, err error) {
 	res, err := b.conn.call(ctx, "", "Target.createTarget", map[string]any{"url": "about:blank", "background": true})
 	if err != nil {
@@ -149,11 +156,17 @@ func (b *Browser) restoreSite(ctx context.Context, tab string, sub <-chan event,
 	return nil
 }
 
+// blankPage answers a restore visit. Its icon is inline: a page without one
+// has the browser ask the site for /favicon.ico, a request that does not always
+// pass through the tab's interception and would reach the site with the kept
+// cookies.
+var blankPage = base64.StdEncoding.EncodeToString([]byte(`<!doctype html><link rel="icon" href="data:,">`))
+
 // restoreVisit bounds one blank visit: it is answered here, so it is quick.
 const restoreVisit = 10 * time.Second
 
 // visitBlank opens origin in the tab and returns once its page has loaded.
-// A request to the origin is answered with an empty page; any other is
+// A request to the origin is answered with blankPage; any other is
 // refused, so a browser that would upgrade http to https falls back to the
 // origin asked for, and nothing else is visited. A request that ended before
 // it was answered, such as an earlier visit's, needs no answer.
@@ -179,7 +192,10 @@ func (b *Browser) visitBlank(ctx context.Context, tab string, sub <-chan event, 
 			case "Fetch.requestPaused":
 				id := ev.Params.Get("requestId").String()
 				if o, ok := webOrigin(ev.Params.Get("request.url").String()); ok && o == origin {
-					_, _ = b.conn.call(ctx, tab, "Fetch.fulfillRequest", map[string]any{"requestId": id, "responseCode": 200, "body": ""})
+					_, _ = b.conn.call(ctx, tab, "Fetch.fulfillRequest", map[string]any{
+						"requestId": id, "responseCode": 200, "body": blankPage,
+						"responseHeaders": []map[string]string{{"name": "Content-Type", "value": "text/html"}},
+					})
 				} else {
 					_, _ = b.conn.call(ctx, tab, "Fetch.failRequest", map[string]any{"requestId": id, "errorReason": "ConnectionRefused"})
 				}

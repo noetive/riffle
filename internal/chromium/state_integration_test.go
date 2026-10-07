@@ -6,7 +6,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,11 +28,19 @@ localStorage.setItem("token", "t-1");
 </script>`
 
 func TestABrowserStartedWithTheStateOfAnotherIsSignedInWithoutAskingTheSite(t *testing.T) {
-	var hits atomic.Int32
+	var mu sync.Mutex
+	var asked []string // guarded by mu: every path the site was asked for
+	askedSince := func(n int) []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(asked[n:])
+	}
 	var sent atomic.Value
 	sent.Store("")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits.Add(1)
+		mu.Lock()
+		asked = append(asked, r.URL.Path)
+		mu.Unlock()
 		sent.Store(r.Header.Get("Cookie"))
 		http.SetCookie(w, &http.Cookie{Name: "sid", Value: "s-1", Path: "/", HttpOnly: true})
 		_, _ = w.Write([]byte(signedIn))
@@ -63,15 +73,12 @@ func TestABrowserStartedWithTheStateOfAnotherIsSignedInWithoutAskingTheSite(t *t
 		t.Fatalf("both the HttpOnly session cookie and the script cookie are kept: %v", names)
 	}
 
-	before := hits.Load()
+	before := len(askedSince(0))
 	second, err := chromium.Open(ctx, 800, 600, chromium.WithRequestFilter(allow), chromium.WithState(st))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer second.Close()
-	if n := hits.Load() - before; n != 0 {
-		t.Errorf("restoring asked the site %d times; it must not ask at all", n)
-	}
 	if err := second.Load(ctx, srv.URL+"/"); err != nil {
 		t.Fatal(err)
 	}
@@ -81,6 +88,10 @@ func TestABrowserStartedWithTheStateOfAnotherIsSignedInWithoutAskingTheSite(t *t
 	v, err := second.Eval(ctx, "localStorage.getItem('token')")
 	if err != nil || v != "t-1" {
 		t.Errorf("the page finds its kept storage: %v %v", v, err)
+	}
+	// Checked last, so a late request of the restore is in by now.
+	if got := askedSince(before); !slices.Equal(got, []string{"/"}) {
+		t.Errorf("after restoring, the site was asked for %v; restoring must ask nothing, only the load asks", got)
 	}
 }
 
