@@ -70,7 +70,14 @@ test("doctor runs the native check and lists configured editors", async (t) => {
 
   const calls = [];
   const out = capture();
-  const code = await run(["doctor"], { io: out, ctx, runNative: (args) => (calls.push(args), 0) });
+  const code = await run(["doctor"], {
+    io: out,
+    ctx,
+    runNative: (args) => {
+      calls.push(args);
+      return 0;
+    },
+  });
   assert.equal(code, 0);
   assert.deepEqual(calls, [["doctor"]]);
   assert.match(out.lines.join("\n"), /Cursor \(user\): configured/);
@@ -85,7 +92,13 @@ test("doctor passes on a failing native check", async (t) => {
 test("doctor reports a missing binary rather than throwing", async (t) => {
   const { ctx } = sandbox(t);
   const io = capture();
-  const code = await run(["doctor"], { io, ctx, runNative: () => { throw new Error("could not find the riffle binary"); } });
+  const code = await run(["doctor"], {
+    io,
+    ctx,
+    runNative: () => {
+      throw new Error("could not find the riffle binary");
+    },
+  });
   assert.equal(code, 1);
   assert.match(io.errors.join("\n"), /could not find/);
 });

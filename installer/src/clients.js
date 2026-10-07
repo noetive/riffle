@@ -118,7 +118,9 @@ function assertUsableWorkspace(spec, scope, ctx) {
   throw new Error(
     `the ${scope} scope for ${spec.displayName} writes into the current directory, and you are in your home directory, ` +
       `where ${spec.displayName} would not read it. ` +
-      (alternative ? `Change to your project directory, or use --scope ${alternative}.` : `Change to your project directory and run again.`),
+      (alternative
+        ? `Change to your project directory, or use --scope ${alternative}.`
+        : `Change to your project directory and run again.`),
   );
 }
 

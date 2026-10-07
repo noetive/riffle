@@ -2,9 +2,19 @@
   "name": "@noetive/riffle",
   "version": "0.1.0",
   "description": "A browser your agent can read. Installs Riffle as an MCP server in your AI editor.",
-  "keywords": ["mcp", "modelcontextprotocol", "noetive", "riffle", "browser", "agent", "ai"],
+  "keywords": [
+    "mcp",
+    "modelcontextprotocol",
+    "noetive",
+    "riffle",
+    "browser",
+    "agent",
+    "ai"
+  ],
   "homepage": "https://noetive.io/riffle",
-  "bugs": { "url": "https://github.com/noetive/riffle/issues" },
+  "bugs": {
+    "url": "https://github.com/noetive/riffle/issues"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/noetive/riffle.git",
@@ -14,13 +24,30 @@
   "author": "Noetive.io",
   "mcpName": "io.noetive/riffle",
   "type": "commonjs",
-  "bin": { "riffle": "./bin/riffle.js" },
-  "files": ["bin/", "src/", "skills/", "postinstall.js", "README.md"],
-  "engines": { "node": ">=20" },
+  "bin": {
+    "riffle": "./bin/riffle.js"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "skills/",
+    "postinstall.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "test": "node --test \"test/*.test.js\"",
+    "check": "biome check .",
+    "fix": "biome check --write .",
     "postinstall": "node postinstall.js",
     "prepublishOnly": "node -e \"if(!Object.keys(require('./package.json').optionalDependencies||{}).length)throw new Error('optionalDependencies is empty; scripts/build-platform-packages.js writes them and must run before publish')\""
   },
-  "dependencies": { "jsonc-parser": "^3.3.1" }
+  "dependencies": {
+    "jsonc-parser": "^3.3.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15"
+  }
 }

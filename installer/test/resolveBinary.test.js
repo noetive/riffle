@@ -13,7 +13,9 @@ test("every platform resolves to a riffle package and a release asset", () => {
   assert.deepEqual(Object.keys(PLATFORM_PACKAGES).sort(), ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-x64"]);
   for (const [key, pkg] of Object.entries(PLATFORM_PACKAGES)) assert.equal(pkg, `@noetive/riffle-${key}`);
   assert.deepEqual(
-    Object.keys(PLATFORM_PACKAGES).map((k) => assetName(k)).sort(),
+    Object.keys(PLATFORM_PACKAGES)
+      .map((k) => assetName(k))
+      .sort(),
     ["riffle-darwin-arm64", "riffle-darwin-x64", "riffle-linux-arm64", "riffle-linux-x64", "riffle-win32-x64.exe"],
   );
   assert.equal(assetUrl("1.2.3", "linux-x64"), "https://github.com/noetive/riffle/releases/download/v1.2.3/riffle-linux-x64");

@@ -54,7 +54,11 @@ function parseArgs(argv) {
 
 // The editors a command applies to: those named, else those detected.
 function pickClients(flags, ctx) {
-  if (flags.client) return flags.client.split(",").map((id) => id.trim()).filter(Boolean);
+  if (flags.client)
+    return flags.client
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean);
   return clientIds().filter((id) => isInstalled(clientSpec(id), ctx, existsSync));
 }
 
@@ -71,7 +75,9 @@ async function confirm(question, io) {
 async function init(flags, io, ctx) {
   const keepState = flags["keep-state"];
   if (keepState !== undefined && !stateName(keepState)) {
-    io.err(`--keep-state ${JSON.stringify(keepState)}: use at most 64 lower case letters, digits, - and _, starting with a letter or digit`);
+    io.err(
+      `--keep-state ${JSON.stringify(keepState)}: use at most 64 lower case letters, digits, - and _, starting with a letter or digit`,
+    );
     return 1;
   }
   const ids = pickClients(flags, ctx);
@@ -103,7 +109,9 @@ async function init(flags, io, ctx) {
       const options = { chrome: flags.chrome, keepState, dryRun: flags["dry-run"] };
 
       const result = install(spec, scope, ctx, options);
-      io.out(`${spec.displayName}: ${result.changed ? (options.dryRun ? "would update" : "updated") : "already configured"} ${result.target}`);
+      io.out(
+        `${spec.displayName}: ${result.changed ? (options.dryRun ? "would update" : "updated") : "already configured"} ${result.target}`,
+      );
       if (result.diff) io.out(result.diff);
       if (result.backup) io.out(`  previous file saved to ${result.backup}`);
 
@@ -131,7 +139,9 @@ async function removeCommand(flags, io, ctx) {
       const scope = flags.scope ?? defaultScope(spec);
       const options = { dryRun: flags["dry-run"] };
       const result = remove(spec, scope, ctx, options);
-      io.out(`${spec.displayName}: ${result.changed ? (options.dryRun ? "would remove" : "removed") : "no riffle entry in"} ${result.target}`);
+      io.out(
+        `${spec.displayName}: ${result.changed ? (options.dryRun ? "would remove" : "removed") : "no riffle entry in"} ${result.target}`,
+      );
       if (result.diff) io.out(result.diff);
       const skillResult = removeSkills(spec, scope, ctx, skills, options);
       for (const dir of skillResult.removed) io.out(`  ${options.dryRun ? "would remove" : "removed"} skill ${dir}`);

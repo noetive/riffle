@@ -33,7 +33,7 @@ function runCli(argv) {
   run(argv, { runNative }).then(
     (code) => process.exit(code),
     (err) => {
-      console.error(`riffle: ${err && err.message ? err.message : err}`);
+      console.error(`riffle: ${err?.message ? err.message : err}`);
       process.exit(1);
     },
   );

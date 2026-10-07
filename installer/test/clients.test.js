@@ -10,7 +10,10 @@ const { put, sandbox } = require("./helpers");
 
 test("an editor is detected by its config directory and not otherwise", (t) => {
   const { ctx } = sandbox(t);
-  assert.deepEqual(clientIds().filter((id) => isInstalled(clientSpec(id), ctx, existsSync)), []);
+  assert.deepEqual(
+    clientIds().filter((id) => isInstalled(clientSpec(id), ctx, existsSync)),
+    [],
+  );
 
   put(join(ctx.home, ".cursor", "mcp.json"), "{}");
   put(join(ctx.home, ".kiro", "x"), "");
