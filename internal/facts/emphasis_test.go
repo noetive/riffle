@@ -583,3 +583,64 @@ func TestEachKindOfSmallPrintIsLeftOutOfTheBodySize(t *testing.T) {
 		t.Error("on a page of only small print, text larger than it is still a heading")
 	}
 }
+
+// Chrome reports a button's blended background with its own fill painted in,
+// and leaves a plain container's empty, so the backdrop a fill stands out
+// from is what is painted at the parent.
+func TestPrimaryStandsOutFromTheBackdrop(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		row   []pb.Opt
+		fills []string
+		want  []bool
+	}{
+		{"filled on white", nil, []string{"rgb(0, 102, 255)", grey(238)}, []bool{true, false}},
+		{"light on a blended dark row", []pb.Opt{pb.Behind(grey(30))}, []string{grey(30), grey(240)}, []bool{false, true}},
+		{"light on an unblended dark row", []pb.Opt{pb.Fill(grey(30)), pb.Behind("")}, []string{grey(30), grey(240)}, []bool{false, true}},
+		{"alike on white", nil, []string{grey(238), grey(238)}, []bool{false, false}},
+		{"on an image", []pb.Opt{pb.Behind(""), pb.Style(snapshot.BackgroundImage, "url(x.png)")}, []string{"rgb(0, 102, 255)", grey(238)}, []bool{false, false}},
+	} {
+		b := pb.New(1280, 800)
+		row := b.El(b.Body(), "div", R(0, 0, 800, 40), c.row...)
+		var ids []int32
+		for k, f := range c.fills {
+			ids = append(ids, b.El(row, "button", R(float64(k*100), 0, 90, 30), pb.Fill(f), pb.Behind(f)))
+		}
+		got := primaries(analyze(b), ids)
+		for k := range got {
+			if got[k] != c.want[k] {
+				t.Errorf("%s: primaries = %v, want %v", c.name, got, c.want)
+				break
+			}
+		}
+	}
+}
+
+// Chrome leaves the blended background empty for a paragraph with mixed
+// content, so the colour behind its text is the band painted further out.
+func TestToneReadsTheBandBehindAnUnblendedParagraph(t *testing.T) {
+	b := pb.New(1280, 800)
+	for k := 0; k < 3; k++ {
+		d := b.El(b.Body(), "p", R(0, float64(k*30), 500, 20))
+		b.Text(d, "Ordinary text that forms the baseline of the page.")
+	}
+	band := b.El(b.Body(), "section", R(0, 200, 800, 60), pb.Fill("rgb(26, 26, 26)"), pb.Behind(""))
+	para := b.El(band, "p", R(10, 210, 500, 20), pb.Style(snapshot.Color, "rgb(170, 170, 170)"), pb.Behind(""))
+	i := b.Text(para, "Ships in two days.")
+	if got := analyze(b).Nodes[i].Tone; got != facts.ToneNone {
+		t.Errorf("light grey on a dark band is ordinary text there, got %q", got)
+	}
+}
+
+func TestButtonsOnAnImageLeaveLaterGroupsJudged(t *testing.T) {
+	b := pb.New(1280, 800)
+	hero := b.El(b.Body(), "div", R(0, 0, 800, 40), pb.Behind(""), pb.Style(snapshot.BackgroundImage, "url(x.png)"))
+	b.El(hero, "button", R(0, 0, 90, 30), pb.Fill("rgb(0, 102, 255)"))
+	b.El(hero, "button", R(100, 0, 90, 30), pb.Fill(grey(238)))
+	row := b.El(b.Body(), "div", R(0, 100, 800, 40))
+	save := b.El(row, "button", R(0, 100, 90, 30), pb.Fill("rgb(0, 102, 255)"))
+	cancel := b.El(row, "button", R(100, 100, 90, 30), pb.Fill(grey(238)))
+	if got := primaries(analyze(b), []int32{save, cancel}); !got[0] || got[1] {
+		t.Errorf("a group after one on an image is still judged: primaries = %v", got)
+	}
+}

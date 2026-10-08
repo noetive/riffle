@@ -60,15 +60,15 @@ func (a *analyzer) unreadable(i int32) bool {
 	return contrast(fg.over(bg), bg) < 1.1
 }
 
-// backdrop is the colour behind text node i, and false when a background
-// image lies behind it so the colour cannot be known. Chrome blends a
-// background only for elements with a single text child and leaves it empty
-// when an image is involved, so the text node and its parent are asked first,
-// then each ancestor's blended colour, else its own computed colour is
-// composited over the layers further out until one is opaque. A text node's
-// computed style is its parent's, so the computed walk starts at the parent
-// element; counting both would stack a translucent layer twice. The page
-// itself is taken as white.
+// backdrop is the colour painted at node i, which is what its children sit
+// on, and false when a background image is involved so the colour cannot be
+// known. Chrome blends a background only for elements with a single text
+// child and leaves it empty when an image is involved, so the node and its
+// parent are asked first, then each ancestor's blended colour, else its own
+// computed colour is composited over the layers further out until one is
+// opaque. A text node's computed style is its parent's, so the computed walk
+// starts at the parent element; counting both would stack a translucent
+// layer twice. The page itself is taken as white.
 func (a *analyzer) backdrop(i int32) (rgba, bool) {
 	s := a.s
 	var layers []rgba // translucent, innermost first

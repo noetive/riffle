@@ -5,6 +5,7 @@ package pagebuilder
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/noetive/riffle/internal/snapshot"
 )
@@ -97,8 +98,13 @@ func (b *Builder) add(parent int32, kind snapshot.NodeKind, tag, text string) in
 func (b *Builder) El(parent int32, tag string, box snapshot.Rect, opts ...Opt) int32 {
 	i := b.add(parent, snapshot.KindElement, tag, "")
 	b.s.Box[i] = box
+	behind := b.s.Background[i]
 	for _, o := range opts {
 		o(b, i)
+	}
+	// Chrome paints an opaque fill into the node's own blended background.
+	if f := b.s.Style[i][snapshot.BackgroundColor]; b.s.Background[i] == behind && strings.HasPrefix(f, "rgb(") {
+		b.s.Background[i] = f
 	}
 	return i
 }
@@ -134,7 +140,7 @@ func Inline() Opt { return Style(snapshot.Display, "inline") }
 // Fill sets the node's own background color.
 func Fill(v string) Opt { return Style(snapshot.BackgroundColor, v) }
 
-// Behind sets the blended background color behind the node.
+// Behind sets the blended background color at the node, its own fill included as Chrome reports it.
 func Behind(v string) Opt { return func(b *Builder, i int32) { b.s.Background[i] = v } }
 
 // Position sets the CSS position.

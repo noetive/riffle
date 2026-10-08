@@ -1398,3 +1398,38 @@ func TestADeltaNeverReportsContentAsRemovedThatIsStillOnThePage(t *testing.T) {
 		t.Errorf("the reply is %d characters, far over the view budget", len(out))
 	}
 }
+
+func TestFilledButtonAmongPlainOnesIsPrimary(t *testing.T) {
+	page := `<!doctype html><style>.go{background:#06c;color:#fff}</style>
+<div><button class="go">Save</button> <button>Cancel</button></div>
+<div style="background:#222"><button style="background:#222;color:#fff">Back</button> <button style="background:#eee">Next</button></div>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(page)) }))
+	t.Cleanup(srv.Close)
+	s, ctx := newSession(t, srv.URL)
+	out := s.Run(ctx, "goto "+srv.URL+"\nview outline")
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.Contains(line, "button") {
+			continue
+		}
+		want := strings.Contains(line, `"Save"`) || strings.Contains(line, `"Next"`)
+		if got := strings.Contains(line, "primary"); got != want {
+			t.Errorf("primary=%v, want %v: %s", got, want, line)
+		}
+	}
+	if !strings.Contains(out, `"Save" primary`) || !strings.Contains(out, `"Next" primary`) {
+		t.Errorf("the button whose fill stands out from its backdrop must be primary:\n%s", out)
+	}
+}
+
+func TestTextOnADarkBandIsNotMutedForItsMarkup(t *testing.T) {
+	page := `<!doctype html><p>Plain body copy on white that sets the page baseline.</p><p>More plain body copy on white for the baseline.</p>
+<section style="background:#1a1a1a;color:#aaa;padding:10px"><p>Ships in <a href=#>two days</a> to most addresses.</p></section>
+<section style="background:#1a1a1a;color:#aaa;padding:10px"><p>One line on the dark band.</p></section>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(page)) }))
+	t.Cleanup(srv.Close)
+	s, ctx := newSession(t, srv.URL)
+	out := s.Run(ctx, "goto "+srv.URL+"\nview outline")
+	if strings.Contains(out, "muted") {
+		t.Errorf("the same grey on the same band must read alike, whether or not the paragraph holds a link:\n%s", out)
+	}
+}

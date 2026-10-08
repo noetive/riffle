@@ -122,12 +122,14 @@ type Snapshot struct {
 	Value     []string // current value of form controls
 
 	// Layout. Laid[i] is false for nodes that generate no box.
-	Laid       []bool
-	Box        []Rect
-	Style      [][NumProps]string
-	Paint      []int32  // paint order, higher paints later
-	Scroll     []Rect   // scrollable extent, empty when not a scroll container
-	Background []string // blended background color behind the node
+	Laid   []bool
+	Box    []Rect
+	Style  [][NumProps]string
+	Paint  []int32 // paint order, higher paints later
+	Scroll []Rect  // scrollable extent, empty when not a scroll container
+	// Background is the blended background color at the node, its own fill
+	// included. Chrome leaves it empty for most elements.
+	Background []string
 
 	// Children lists child indexes in DOM order.
 	Children [][]int32

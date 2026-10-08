@@ -125,14 +125,11 @@ func (a *analyzer) baseline() {
 	}
 }
 
+// backgroundOf is the colour behind text node i, taken as white when a
+// background image makes it unknowable.
 func (a *analyzer) backgroundOf(i int32) rgba {
-	for _, k := range []int32{i, a.s.Parent[i]} {
-		if k == snapshot.None {
-			continue
-		}
-		if c, ok := parseColor(a.s.Background[k]); ok && c.a > 0 {
-			return c.over(white)
-		}
+	if bg, known := a.backdrop(i); known {
+		return bg
 	}
 	return white
 }
@@ -294,8 +291,13 @@ func (a *analyzer) primaries() {
 		}
 		fills := make([]rgba, len(g))
 		dist := make([]float64, len(g))
+		// A button's own blended background has its fill painted in, so
+		// the fill is measured against the colour behind the group.
+		bg, known := a.backdrop(p)
+		if !known {
+			continue // an image lies behind the buttons
+		}
 		for k, i := range g {
-			bg := a.backgroundOf(i)
 			fill := bg
 			if c, ok := parseColor(s.Style[i][snapshot.BackgroundColor]); ok {
 				fill = c.over(bg)
