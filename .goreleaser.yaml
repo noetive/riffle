@@ -53,8 +53,9 @@ release:
   replace_existing_artifacts: true
 
   # A prerelease tag must not become the repository's "Latest release", which is
-  # what the installer's fallback download resolves against. `auto` marks it from
-  # the tag, matching the npm dist-tag the release workflow derives the same way.
+  # what the releases page and any latest/download link hand out. `auto` marks
+  # it from the tag, matching the npm dist-tag the release workflow derives the
+  # same way.
   prerelease: auto
 
   extra_files:

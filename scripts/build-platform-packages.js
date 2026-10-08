@@ -84,6 +84,10 @@ function main() {
       os: [target.os],
       cpu: [target.cpu],
       files: ["bin/"],
+      // Yarn PnP serves package files out of a zip, where a binary cannot be
+      // executed. This asks it to unpack the package to disk; other package
+      // managers ignore it.
+      preferUnplugged: true,
     };
     writeFileSync(join(dir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
     writeFileSync(

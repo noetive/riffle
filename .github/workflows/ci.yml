@@ -190,6 +190,19 @@ jobs:
           cosign verify-blob --key "$COSIGN_DIR/cosign.pub" --insecure-ignore-tlog=true
           --bundle dist/checksums.txt.sigstore.json dist/checksums.txt
 
+      # The release stamps the tag's version into every manifest it publishes,
+      # and the MCP registry keeps server.json's versions forever.
+      - name: One version reaches every manifest
+        run: |
+          node scripts/stamp-version.js 0.0.0-ci
+          got=$(jq -r '.version, .packages[""].version' installer/package-lock.json
+            jq -r '.version' installer/package.json
+            jq -r '.version, (.packages[] | select(.identifier == "@noetive/riffle") | .version)' server.json)
+          if [ "$(printf '%s\n' "$got" | sort -u)" != "0.0.0-ci" ] || [ "$(printf '%s\n' "$got" | wc -l)" -ne 5 ]; then
+            printf 'expected five fields at 0.0.0-ci, got:\n%s\n' "$got" >&2
+            exit 1
+          fi
+
       - name: Snapshot builds the five platform binaries
         run: |
           for p in darwin_arm64 darwin_amd64 linux_arm64 linux_amd64; do

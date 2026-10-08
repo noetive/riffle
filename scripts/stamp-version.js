@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 
-// Stamps one version into installer/package.json and its lockfile.
+// Stamps one version into installer/package.json, its lockfile and server.json.
 //
 //     node scripts/stamp-version.js 1.4.0
 //
@@ -24,7 +24,7 @@ function stampJson(path, mutate) {
 
 function main() {
   const version = process.argv[2];
-  if (!version || !/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(version)) {
+  if (!version || !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) {
     console.error("usage: stamp-version.js <semver>  (e.g. 1.4.0)");
     process.exit(2);
   }
@@ -39,6 +39,17 @@ function main() {
       process.exit(1);
     }
     doc.packages[""].version = version;
+  });
+  // The MCP registry records the server version and the npm version it points
+  // at, permanently; both must name the release being published.
+  stampJson(join(ROOT, "server.json"), (doc) => {
+    const wrapper = (doc.packages || []).find((p) => p.identifier === "@noetive/riffle");
+    if (!wrapper) {
+      console.error("server.json has no @noetive/riffle package entry");
+      process.exit(1);
+    }
+    doc.version = version;
+    wrapper.version = version;
   });
   console.log(`stamped ${version}`);
 }

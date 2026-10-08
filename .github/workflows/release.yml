@@ -22,7 +22,41 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Before anything is built or released: a GitHub Release cannot be unpublished
+  # cleanly, so a dead npm credential has to stop the run while nothing exists
+  # yet. npm publishes with the NPM_TOKEN secret, and a granular write token
+  # expires within 90 days, so this is the failure to expect.
+  #
+  # whoami proves the token is live, not that it may publish: npm offers no way
+  # to ask whether it can write to the @noetive scope or bypasses two-factor
+  # authentication. Either gap fails at publish, after the GitHub Release
+  # exists; replace the secret and re-run the failed jobs.
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Check the publish credential
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error title=NPM_TOKEN is not set::Add an npm granular access token with read and write on the @noetive scope and two-factor bypass enabled as the NPM_TOKEN repository secret."
+            exit 1
+          fi
+          npm whoami || {
+            echo "::error title=NPM_TOKEN is not valid::npm rejected the token. It is set but expired or revoked; replace the NPM_TOKEN repository secret."
+            exit 1
+          }
+
   release:
+    needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -53,7 +87,7 @@ jobs:
       - id: version
         run: |
           version="${GITHUB_REF_NAME#v}"
-          echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z_.]+)?$' || {
+          echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || {
             echo "tag ${GITHUB_REF_NAME} is not a semver release tag" >&2
             exit 1
           }
@@ -62,6 +96,8 @@ jobs:
           # npm assigns the `latest` dist-tag to any publish that does not name
           # one; it infers nothing from the version string. Without this a
           # prerelease becomes what every bare `npx @noetive/riffle` installs.
+          # The one exception npm makes: a package's first version always gets
+          # `latest`, whatever the tag, until a release replaces it.
           if [ "$version" = "${version%%-*}" ]; then
             echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
           else
@@ -112,33 +148,11 @@ jobs:
           cache: npm
           cache-dependency-path: installer/package-lock.json
 
-      # Trusted publishing needs npm 11.5.1 or later. Node 22 still bundles
-      # npm 10, which does not know how to exchange an OIDC token and would fall
-      # silently through to token auth. Pinned rather than @latest so a bad npm
-      # release cannot break a release of this.
+      # Publishing authenticates with NPM_TOKEN, checked in preflight. id-token
+      # stays granted for --provenance, which signs with the workflow's OIDC
+      # identity. Pinned rather than @latest so a bad npm release cannot break a
+      # release of this.
       - run: npm install -g npm@11.6.2
-
-      # Before anything is built: otherwise the job builds and packs five
-      # binaries before npm reports ENEEDAUTH, by which point the GitHub Release
-      # already exists. Either OIDC (trusted publishing) or a valid token is
-      # enough. It cannot confirm a trusted publisher is configured for each
-      # package, because npm exposes no way to ask.
-      - name: Check the publish credential
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ]; then
-            echo "OIDC is available; npm will attempt trusted publishing."
-            exit 0
-          fi
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "::error title=No way to authenticate to npm::Configure a trusted publisher for each @noetive/riffle* package on npmjs.com, or add an npm token with publish rights on the @noetive scope as the NPM_TOKEN repository secret."
-            exit 1
-          fi
-          npm whoami || {
-            echo "::error title=NPM_TOKEN is not valid::npm rejected the token. It is set but expired, revoked, or lacks publish rights on the @noetive scope."
-            exit 1
-          }
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
