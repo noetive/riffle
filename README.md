@@ -2,9 +2,9 @@
 
 # Riffle
 
-### A browser your agent can read.
+### Your agent uses the web as text, not screenshots.
 
-**Several steps per call. Only what changed comes back.**
+**Pages as text. Only what changed comes back. Several steps per call. Fully interactive, without a mouse or keyboard.**
 
 [![npm](https://img.shields.io/npm/v/@noetive/riffle?style=flat-square&color=cb3837&label=npm)](https://www.npmjs.com/package/@noetive/riffle)
 [![CI](https://img.shields.io/github/actions/workflow/status/noetive/riffle/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/noetive/riffle/actions/workflows/ci.yml)
@@ -12,7 +12,7 @@
 [![MCP server](https://img.shields.io/badge/MCP-server-5c4ee5?style=flat-square)](#install)
 [![License: ISC](https://img.shields.io/badge/license-ISC-f4c430?style=flat-square)](LICENSE)
 
-**[Install](#install) · [Use](#use) · [Stay signed in](#stay-signed-in) · [Safe by default](#safe-by-default) · [Releases](https://github.com/noetive/riffle/releases)**
+**[Why Riffle](#why-riffle) · [Install](#install) · [Use](#use) · [Stay signed in](#stay-signed-in) · [Safe by default](#safe-by-default) · [Releases](https://github.com/noetive/riffle/releases)**
 
 <code>npx @noetive/riffle init</code>
 
@@ -22,25 +22,75 @@
 
 ---
 
-Riffle is an MCP server and CLI that lets an AI agent use real websites without screenshots.
+Riffle is an MCP server and CLI. It runs Chrome with the page's JavaScript and hands your agent each page as text it can read and act on.
 
-## The problem
+## Why Riffle
 
-Your browser agent spends a turn and an image on every click. Or it re-reads the whole page after every action, and still can't tell that the "Checkout" button is behind a cookie dialog, that the price is struck through, or that a field is disabled.
+### Your agent sees what a person sees
 
-Riffle gives the agent what the page means:
+What is covered, hidden, primary, disabled, struck through or truncated is written on the line, in words. No HTML, no CSS, no images: Riffle turns the page into short lines of text, so your agent reads these facts instead of guessing them from markup or pixels.
 
 ```
 modal d1 "Cookie preferences" covers=page
+  text "We use cookies."
   button b1 "Accept all" primary
   button b2 "Reject"
 main covered-by=d1
   h1 "Your cart"
-  item "Trail shoe 42" "€89" strike "€69" red | qty f1=1 | button b3 "Remove"
-  button b5 "Checkout" primary
+  list
+    item "Trail shoe 42" "€89" strike "€69" red | "Qty" | spinbutton f1 "Qty" ="1" | button b3 "Remove"
+  button b4 "Checkout"
 ```
 
-Hidden, covered, primary, disabled, struck through, truncated. These are facts on the nodes, so the agent reads them instead of guessing from pixels.
+The cart sits behind a cookie dialog, the old price is struck through and the new one is red. `covered-by=d1` tells your agent the checkout button sits behind the dialog.
+
+### Context that lasts the whole task
+
+After the first view, every reply carries only what changed. Click "Reject" on the page above and this is the whole reply:
+
+```
+- d1
+- text "We use cookies."
+- b1
+- b2
+~ main -covered-by=d1
+```
+
+Every view also takes a token budget, so a long page costs what you set: `view interactive budget=800`.
+
+### Fewer turns, less waiting
+
+Your agent writes a program, one step per line, and Riffle runs all of it in one call. A whole sign-in is one turn:
+
+```
+goto https://shop.example/login
+try click "Reject"
+fill "Email" "ralph@example.com"
+fill "Password" $secret:shop
+click "Sign in"
+expect url ~ /account
+view interactive budget=800
+```
+
+After each step Riffle waits until the page has answered and gone quiet instead of sleeping for a fixed time: about a second after a click, a few seconds after a page loads. The program stops at the first step that fails and says which step and why.
+
+### No mouse, no keyboard, no screenshots
+
+Your agent names what to act on by the words on it or by a ref from a view: `click "Reject"`, `fill "Email" "ralph@example.com"`, `click b4`. Your agent never steers a pointer, aims at coordinates or reads an image. `fill` sets a whole field in one step, and `press Enter` names the key. When a step can't happen, the reply says what is in the way:
+
+```
+failed line 1: click "Checkout": blocked: b4 covered-by d1 "Cookie preferences"
+```
+
+Your agent's next program closes the dialog first.
+
+### Instead of
+
+| What your agent uses now | What it costs | With Riffle |
+| --- | --- | --- |
+| Screenshots and clicks at coordinates | An image and a turn for every action, and guesses from pixels | Text, and several steps per call |
+| A page snapshot or raw HTML after every action | The whole page again in your agent's context, every time | Only what changed |
+| Fetching a page as Markdown | It can read, but it can't click, fill in or sign in | A real browser: click, fill in, sign in |
 
 ## Install
 
@@ -72,26 +122,7 @@ Riffle runs its own throwaway Chrome. It never touches your saved passwords or k
 
 ## Use
 
-Your agent gets two tools. `browser_run` takes a program, one step per line. `browser_view` reads the page.
-
-```
-goto https://shop.example/cart
-click "Reject"
-fill "Email" "ralph@example.com"
-fill "Password" $secret:shop
-click "Sign in"
-expect url ~ /account
-view interactive budget=800
-```
-
-The reply is what changed, not the page again:
-
-```
-- d1
-~ main -covered-by=d1
-```
-
-If a step fails, the program stops there and says which step and why. A click on something covered by a dialog comes back as `blocked: b5 covered-by d1 "Cookie preferences"`, so the next program can close the dialog first.
+Your agent gets two tools. `browser_run` takes a program, one step per line, like the sign-in under [Fewer turns, less waiting](#fewer-turns-less-waiting). `browser_view` reads the page.
 
 Not sure of the syntax? Ask for `view help`, or run `riffle grammar`.
 
@@ -132,16 +163,14 @@ or, by hand:
 
 ## What you can do with it
 
-- **Log in and finish a flow.** Fill, click, check the result, in one call.
-- **Read a page at a size you choose.** Every view takes a token budget, so a long page costs what you decide.
 - **Pull a table out of a page.** `table REF` returns rows as TSV, whatever the markup.
 - **See what the page calls.** `view net` lists the fetch and XHR requests behind it.
 - **Test your own web app.** Drive localhost the way a user would, with real page JavaScript running. Start Riffle with `-allow-private`, for example `riffle mcp -allow-private` in your editor's entry, so it may reach local addresses.
 - **Stay signed in between runs.** Sign in once with `-keep-state NAME`, and the agent is still signed in the next time the editor starts. See [Stay signed in](#stay-signed-in).
 
-Pages run in real time, as in any browser, and keep running while your agent thinks: a countdown, an expiring sign-in or a panel that opens later moves on between calls, and the next reply tells what changed. After each step Riffle waits until the page has answered and gone quiet: about a second after a click or a keystroke, a few seconds after a page loads, and longer for a page still loading.
+Pages run in real time, as in any browser, and keep running while your agent thinks: a countdown, an expiring sign-in or a panel that opens later moves on between calls, and the next reply tells what changed.
 
-Riffle also says so when a step did not do what it asked, such as a form that was refused or a click that a dialog blocked, so the agent can fix it and go on.
+Riffle also says so when a step did not do what it asked, such as a form that was refused, so the agent can fix it and go on.
 
 ## Safe by default
 

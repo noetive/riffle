@@ -1,7 +1,7 @@
 {
   "name": "@noetive/riffle",
   "version": "0.1.0",
-  "description": "A browser your agent can read. Installs Riffle as an MCP server in your AI editor.",
+  "description": "Your agent uses the web as text, not screenshots. Several steps per call, only changes come back. Installs Riffle as an MCP server in your AI editor.",
   "keywords": [
     "mcp",
     "modelcontextprotocol",

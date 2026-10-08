@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.noetive/riffle",
   "title": "Riffle",
-  "description": "A browser your agent can read: several steps per call, only what changed comes back.",
+  "description": "Your agent uses the web as text, not screenshots. Several steps per call, only changes come back.",
   "repository": {
     "url": "https://github.com/noetive/riffle",
     "source": "github"

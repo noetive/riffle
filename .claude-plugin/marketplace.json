@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "description": "A browser your agent can read: several steps per call, only what changed comes back."
+    "description": "Your agent uses the web as text, not screenshots. Several steps per call, only changes come back."
   },
   "name": "riffle",
   "owner": {
@@ -12,7 +12,7 @@
         "name": "Noetive.io"
       },
       "category": "development",
-      "description": "A browser your agent can read: several steps per call, only what changed comes back.",
+      "description": "Your agent uses the web as text, not screenshots. Several steps per call, only changes come back.",
       "keywords": [
         "riffle",
         "browser",
