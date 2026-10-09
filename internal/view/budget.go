@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/noetive/riffle/internal/snapshot"
@@ -58,6 +59,9 @@ func (c *compiler) refill(lines []Line, t, limit int) []Line {
 		for _, i := range cand[:n] {
 			for j := i; j >= 0 && !add[j]; j = lines[j].parent {
 				add[j] = true
+				if e := lines[j].close; e > 0 {
+					add[e] = true // an open code block reads the rest of the page as code
+				}
 			}
 		}
 		return c.elide(lines, func(i int, l Line) bool { return l.class < t || add[i] })
@@ -84,7 +88,9 @@ func (c *compiler) refill(lines []Line, t, limit int) []Line {
 // budget and so can never be kept whole. Without it a page that is one long
 // line would come back as a count of dropped lines and nothing to read. The
 // cut falls between words and outside any link or emphasis the text opened;
-// when that leaves too little to be worth keeping, no ref is handed out.
+// when that leaves too little to be worth keeping, no ref is handed out. A
+// line of code, such as a document of JSON on one line, is cut where it is
+// and its ref goes after the block: inside it, the ref would read as code.
 func (c *compiler) cutToFit(lines []Line, i int, build func([]Line) []Line, limit int) ([]Line, bool) {
 	l := lines[i]
 	if l.Body == "" || utf8.RuneCountInString(l.String())+1 <= limit {
@@ -101,10 +107,15 @@ func (c *compiler) cutToFit(lines []Line, i int, build func([]Line) []Line, limi
 		ref = c.rt.get(key, "r")
 		minted = !had
 	}
+	code := inFence(lines, l)
 	body := []rune(l.Body)
 	with := func(k int) []Line {
 		cut := make([]Line, len(lines))
 		copy(cut, lines)
+		if code {
+			cut[i].Body = string(body[:k]) + "…"
+			return afterFence(build(cut), lines[l.parent], Line{Indent: lines[l.parent].Indent, Label: "…", Body: "1 line cut " + ref, class: classModal, parent: -1}, ref)
+		}
 		cut[i].Body = string(body[:k]) + "… " + ref
 		cut[i].Label, cut[i].Tags = "", nil
 		return build(cut)
@@ -118,8 +129,10 @@ func (c *compiler) cutToFit(lines []Line, i int, build func([]Line) []Line, limi
 			hi = mid - 1
 		}
 	}
-	// Backing off only shortens the cut, so what fitted still fits.
-	lo = cutPoint(body, lo)
+	if !code {
+		// Backing off only shortens the cut, so what fitted still fits.
+		lo = cutPoint(body, lo)
+	}
 	if lo < minCut || linesChars(with(lo)) > limit {
 		if minted {
 			c.rt.discard(l.expandKey())
@@ -127,6 +140,23 @@ func (c *compiler) cutToFit(lines []Line, i int, build func([]Line) []Line, limi
 		return nil, false
 	}
 	return with(lo), true
+}
+
+// afterFence puts note after the closing fence of the code block that open
+// starts in lines, unless a count of the block's dropped lines, which names
+// it by ref already, is there.
+func afterFence(lines []Line, open Line, note Line, ref string) []Line {
+	for _, l := range lines {
+		if l.close == 0 || l.Key != open.Key || l.Body != open.Body {
+			continue
+		}
+		e := l.close
+		if e+1 < len(lines) && lines[e+1].Label == "…" && strings.HasSuffix(lines[e+1].Body, " "+ref) {
+			return lines
+		}
+		return slices.Insert(lines, e+1, note)
+	}
+	return lines
 }
 
 // expandable: the backend id names an element, which is what expand resolves.
@@ -229,7 +259,9 @@ func openConstruct(text []rune) int {
 // says less than the count of lines it replaces.
 const minCut = 24
 
-// elide drops every line the predicate does not keep.
+// elide drops every line the predicate does not keep, and puts a count of
+// them, with the ref that opens them, where they were; a count of lines
+// dropped from the end of a code block goes after its closing fence.
 func (c *compiler) elide(lines []Line, kept func(i int, l Line) bool) []Line {
 	keep := func(i int) bool { return kept(i, lines[i]) }
 	newIdx := make([]int, len(lines))
@@ -266,13 +298,35 @@ func (c *compiler) elide(lines []Line, kept func(i int, l Line) bool) []Line {
 			body += " " + ref
 		}
 		l := Line{Indent: first.Indent, Label: "…", Body: body, class: classModal, parent: -1}
+		if p := first.parent; p >= 0 && lines[p].close == j && keep(j) {
+			// Lines dropped from the end of a code block are counted after its
+			// closing fence: inside it, the count would read as code.
+			end := lines[j]
+			end.parent = newIdx[p]
+			newIdx[j] = len(out)
+			l.Indent = lines[p].Indent
+			out = append(out, end, l)
+			i = j + 1
+			continue
+		}
 		if first.parent >= 0 && keep(first.parent) {
 			l.parent = newIdx[first.parent]
 		}
 		out = append(out, l)
 		i = j
 	}
+	// An opening fence names its closing fence where that now is.
+	for k := range out {
+		if e := out[k].close; e > 0 {
+			out[k].close = newIdx[e]
+		}
+	}
 	return out
+}
+
+// inFence: the line is a line of a code block, between its fences.
+func inFence(lines []Line, l Line) bool {
+	return l.parent >= 0 && lines[l.parent].close > 0
 }
 
 // refers: the line names something expand can open, or already has a ref.
@@ -287,20 +341,49 @@ func (c *compiler) refOf(l Line) string {
 }
 
 // cutTail keeps whole lines from the front while they fit and cuts the one
-// that straddles the limit.
+// that straddles the limit. A code block it stops in is closed, room for its
+// fence kept from the start, so nothing after it reads as code, and what it
+// drops is counted when the count fits; a line of code is not cut.
 func cutTail(lines []Line, limit int) []Line {
+	width := func(l Line) int { return utf8.RuneCountInString(l.String()) + 1 }
 	var out []Line
 	left := limit
-	for _, l := range lines {
-		s := l.String()
-		n := utf8.RuneCountInString(s) + 1
-		if n <= left {
+	end := -1 // the closing fence of the code block being kept, -1 outside one
+	for i, l := range lines {
+		need := width(l)
+		switch {
+		case l.close > 0:
+			need += width(lines[l.close])
+		case end >= 0 && i != end:
+			need += width(lines[end])
+		}
+		if need <= left {
 			out = append(out, l)
-			left -= n
+			left -= width(l)
+			switch {
+			case l.close > 0:
+				end = l.close
+			case i == end:
+				end = -1
+			}
 			continue
 		}
-		if left > 1 {
-			r := []rune(s)
+		if end >= 0 {
+			out = append(out, lines[end])
+			left -= width(lines[end])
+			n := len(lines) - i - 1 // all from here on but the closing fence
+			noun := "lines"
+			if n == 1 {
+				noun = "line"
+			}
+			count := Line{Indent: lines[end].Indent, Label: "…", Body: fmt.Sprintf("%d more %s", n, noun), class: classModal, parent: -1}
+			if n > 0 && width(count) <= left {
+				out = append(out, count)
+			}
+			break
+		}
+		if left > 1 && l.close == 0 {
+			r := []rune(l.String())
 			out = append(out, Line{Body: string(r[:left-1]), class: classModal, parent: -1})
 		}
 		break

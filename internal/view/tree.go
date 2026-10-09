@@ -2,6 +2,7 @@ package view
 
 import (
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,6 +40,10 @@ type seg struct {
 	strike bool
 	// br marks the line break an element made, not text.
 	br bool
+	// pre is what the text's white-space keeps. A preformatted stretch holds
+	// its lines separated by "\n" and carries no style: in code, colour and
+	// weight are highlighting, not meaning.
+	pre facts.Preserve
 }
 
 // item is a node of the compiled tree before it is flattened to lines.
@@ -64,8 +69,10 @@ type item struct {
 	node    int32
 	cover   int32
 
-	leaf      bool
-	textRun   bool
+	leaf    bool
+	textRun bool
+	// code marks the text run of a <pre> block, which read fences.
+	code      bool
 	collapsed bool
 	modal     bool
 }
@@ -188,6 +195,12 @@ func (c *compiler) elem(n int32) []*item {
 		return []*item{it}
 	case nd.Interactive:
 		return []*item{c.leaf(n)}
+	case s.Tag[n] == "pre" && nd.Preserve != facts.PreserveNone && !c.holdsControl(n):
+		it := c.code(n)
+		if it == nil {
+			return nil
+		}
+		return []*item{it}
 	case nd.Heading > 0:
 		h := c.heading(n)
 		if h.leaf && h.name == "" {
@@ -417,6 +430,22 @@ func (c *compiler) hasInteractive(n int32) bool {
 	return false
 }
 
+// holdsControl: something inside n is more than words of code: an actionable
+// node other than a link, an embedded document or a modal layer. Links in code
+// are part of it, as a documentation page links the names in a signature.
+func (c *compiler) holdsControl(n int32) bool {
+	for _, k := range c.s.Children[n] {
+		if c.s.Kind[k] != snapshot.KindElement {
+			continue
+		}
+		nk := c.fact(k)
+		if nk.Modal || nk.Visible() && (nk.Interactive && nk.Role != "link" || embeddedTags[c.s.Tag[k]] || c.holdsControl(k)) {
+			return true
+		}
+	}
+	return false
+}
+
 // heading compiles a heading. One that contains actionable nodes stays a
 // container so they keep their own lines.
 func (c *compiler) heading(n int32) *item {
@@ -591,6 +620,94 @@ func (c *compiler) rawText(n int32) string {
 	return words(sb.String())
 }
 
+// code compiles a <pre> block to one run of text that keeps its lines, its
+// links in their places, nil when it shows nothing.
+func (c *compiler) code(n int32) *item {
+	segs := c.codeSegs(n)
+	parts := make([]string, len(segs))
+	for i, s := range segs {
+		parts[i] = s.text
+		if s.link != nil {
+			parts[i] = "link" // words on the line, whatever they say
+		}
+	}
+	mode := c.fact(n).Preserve
+	kept := pagetext.Block(parts, mode == facts.PreserveSpaces)
+	var out []seg
+	for i, s := range segs {
+		if s.link == nil {
+			if s.text, s.pre = kept[i], mode; s.text == "" {
+				continue
+			}
+		}
+		out = append(out, s)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	it := c.base(n, "text", "")
+	it.leaf, it.textRun, it.code = true, true, true
+	it.block = c.s.Backend[n]
+	it.segs = out
+	return it
+}
+
+// codeSegs is the text of a preformatted block as it is written, and its
+// links, with a line break where an element breaks the line: a <br>, or a
+// block that a highlighter puts around each line. Colour and weight are
+// highlighting and not kept. Text a person cannot see is left out, its line
+// breaks kept, and so is generated text, which in code draws line numbers and
+// not code, as innerText leaves it out.
+func (c *compiler) codeSegs(n int32) []seg {
+	var segs []seg
+	write := func(s string) {
+		if l := len(segs) - 1; l >= 0 && segs[l].link == nil {
+			segs[l].text += s
+			return
+		}
+		segs = append(segs, seg{text: s})
+	}
+	newline := func() {
+		if l := len(segs) - 1; l >= 0 && !strings.HasSuffix(segs[l].text, "\n") {
+			write("\n")
+		}
+	}
+	var walk func(int32)
+	walk = func(i int32) {
+		for _, k := range c.s.Children[i] {
+			nk := c.fact(k)
+			switch c.s.Kind[k] {
+			case snapshot.KindText:
+				switch {
+				case !nk.Hidden && !nk.Unseen:
+					write(c.s.Text[k])
+				case nk.Unseen:
+					// Lines a person cannot read still end where they did.
+					write(strings.Repeat("\n", strings.Count(c.s.Text[k], "\n")))
+				}
+			case snapshot.KindElement:
+				switch {
+				case !nk.Visible(), c.s.Pseudo[k] != "", c.decorativeMarker(k):
+				case c.s.Tag[k] == "br":
+					write("\n")
+				case nk.Role == "link":
+					segs = append(segs, seg{link: c.leaf(k)})
+				case strings.HasPrefix(c.s.Style[k][snapshot.Display], "inline"), c.s.Style[k][snapshot.Display] == "contents":
+					// Only the display decides: a highlighter makes a span a
+					// block to put each line of code in one.
+					walk(k)
+				default:
+					newline()
+					walk(k)
+					newline()
+				}
+			}
+		}
+	}
+	walk(n)
+	return segs
+}
+
 // destinationTags says where a link goes when that is not a web page: a mail
 // or phone handler, a script, or a file to download. Links to pages stay
 // short, since the agent reads their text and not their address.
@@ -697,6 +814,13 @@ func (r *runBuilder) text(n int32) {
 	// or, when the text has no box of its own, not at all.
 	r.last = r.c.s.Box[n]
 	nd := r.c.fact(n)
+	if nd.Unseen && nd.Preserve != facts.PreserveNone && !r.c.labels[n] {
+		// Preformatted lines a person cannot read still end where they did.
+		if k := strings.Count(r.c.s.Text[n], "\n"); k > 0 {
+			r.segs = append(r.segs, seg{text: strings.Repeat("\n", k), pre: nd.Preserve})
+		}
+		return
+	}
 	if nd.Hidden || nd.Unseen || nd.Text == "" || r.c.labels[n] {
 		return
 	}
@@ -714,8 +838,12 @@ func (r *runBuilder) text(n int32) {
 		bold = fontWeight(st[p][snapshot.FontWeight]) >= 600
 		italic = strings.Contains(st[p][snapshot.FontStyle], "italic")
 	}
+	text := nd.Text
+	if nd.Preserve != facts.PreserveNone {
+		text = r.c.s.Text[n] // finish judges its whitespace with the rest of the run
+	}
 	r.note(n)
-	r.segs = append(r.segs, seg{text: nd.Text, tags: tags, bold: bold, italic: italic, strike: nd.Strike})
+	r.segs = append(r.segs, seg{text: text, tags: tags, bold: bold, italic: italic, strike: nd.Strike, pre: nd.Preserve})
 }
 
 func (r *runBuilder) fold(n int32) {
@@ -726,7 +854,12 @@ func (r *runBuilder) fold(n int32) {
 		r.segs = append(r.segs, seg{text: r.c.fact(n).Text})
 	}
 	if r.c.s.Tag[n] == "br" {
-		r.segs = append(r.segs, seg{text: " ", br: true})
+		if p := r.c.fact(n).Preserve; p != facts.PreserveNone {
+			// A break in preformatted text is a line of it, not a paragraph end.
+			r.segs = append(r.segs, seg{text: "\n", pre: p})
+		} else {
+			r.segs = append(r.segs, seg{text: " ", br: true})
+		}
 	}
 	for _, k := range r.c.s.Children[n] {
 		switch r.c.s.Kind[k] {
@@ -757,10 +890,11 @@ const wordGap = 2
 
 // apart puts a space before an element that starts clear of the one read last
 // on the same line, as badges set apart by a margin are: the markup has no
-// space between them, but a person sees one.
+// space between them, but a person sees one. Preformatted text spells out
+// its own spaces.
 func (r *runBuilder) apart(n int32) {
 	l, b := r.last, r.c.s.Box[n]
-	if l.Empty() || b.Empty() || len(r.segs) == 0 {
+	if l.Empty() || b.Empty() || len(r.segs) == 0 || r.c.fact(n).Preserve != facts.PreserveNone {
 		return
 	}
 	sameLine := b.Y < l.Y+l.H && l.Y < b.Y+b.H
@@ -777,10 +911,25 @@ func (r *runBuilder) link(l *item) {
 }
 
 // finish merges neighbouring stretches of equal style and returns the run as
-// a text item, or nil when there is nothing readable.
+// a text item, or nil when there is nothing readable. A run whose
+// preformatted text breaks a line keeps its lines, judged over the whole run;
+// any other run is words, as if nothing in it were preformatted.
 func (r *runBuilder) finish() *item {
+	segs := r.segs
+	r.segs = nil
+	var mode facts.Preserve
+	broken := false
+	for _, s := range segs {
+		mode = max(mode, s.pre)
+		broken = broken || s.pre != facts.PreserveNone && strings.Contains(s.text, "\n")
+	}
 	var merged []seg
-	for _, s := range r.segs {
+	for _, s := range segs {
+		if broken && s.link == nil {
+			// Colour and weight in lines of code are highlighting, not meaning.
+			s.tags = slices.DeleteFunc(s.tags, func(t string) bool { return t != "strike" })
+			s.bold, s.italic = false, false
+		}
 		if s.link == nil && len(merged) > 0 {
 			l := &merged[len(merged)-1]
 			if l.link == nil && strings.Join(l.tags, ",") == strings.Join(s.tags, ",") && l.bold == s.bold && l.italic == s.italic {
@@ -791,16 +940,33 @@ func (r *runBuilder) finish() *item {
 		merged = append(merged, s)
 	}
 	var out []seg
-	for _, s := range merged {
-		if s.link == nil {
-			s.text = words(s.text)
-			if s.text == "" {
-				continue
+	if broken {
+		parts := make([]string, len(merged))
+		for i, s := range merged {
+			parts[i] = s.text
+			if s.link != nil {
+				parts[i] = "link" // words on the line, whatever they say
 			}
 		}
-		out = append(out, s)
+		kept := pagetext.Block(parts, mode == facts.PreserveSpaces)
+		for i, s := range merged {
+			if s.link == nil {
+				if s.text, s.pre = kept[i], mode; s.text == "" {
+					continue
+				}
+			}
+			out = append(out, s)
+		}
+	} else {
+		for _, s := range merged {
+			if s.link == nil {
+				if s.text, s.pre = words(s.text), facts.PreserveNone; s.text == "" {
+					continue
+				}
+			}
+			out = append(out, s)
+		}
 	}
-	r.segs = nil
 	if len(out) == 0 {
 		return nil
 	}

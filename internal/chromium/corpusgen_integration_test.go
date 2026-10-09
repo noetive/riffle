@@ -95,7 +95,13 @@ text</pre><p style="text-overflow:ellipsis;overflow:hidden;white-space:nowrap;wi
 		"weird": `<!doctype html><p>a&nbsp;b&#8203;c&shy;d&zwj;e</p><p>😀🎉 日本語 العربية é́</p><pre>tab	tab
 newline</pre><p>` + longWord(3000) + `</p><button title="Title only"></button><a href="javascript:void(0)">js</a><a href="">empty</a><a>no href</a><input type=button value="Val btn"><input type=image alt="Img btn" src=x><button aria-label="Aria"><span>Inner</span></button>`,
 		"frames": `<!doctype html><iframe srcdoc="<button>in</button>" title="Pay"></iframe><iframe sandbox src="about:blank"></iframe><frameset></frameset><div id=h></div><script>const r=h.attachShadow({mode:'closed'});r.innerHTML='<button>closed</button>'</script>`,
-		"deep":   `<!doctype html>` + deepNest(60) + `<div hidden>gone</div><div style="display:none">none</div><div style="visibility:hidden">invisible</div><div style="opacity:0">clear</div><template><b>t</b></template><noscript>ns</noscript>`,
+		"code": `<!doctype html><main><ol><li><p>Install:</p><pre><code><span style="color:#c00;font-weight:bold">npm</span> install
+  --save-dev x</code></pre></li></ol><pre><span style="display:block">def f():</span><span style="display:block">    return "` + "```" + `"</span></pre><pre>a<br>  b<a href=/x>link</a>
+c</pre><div style="white-space:pre-wrap">chat line
+	tabbed</div><p style="white-space:pre-line">  a   b
+ c</p><pre style="white-space:normal">x
+y</pre><pre style="overflow:auto;width:100px">` + longWord(400) + `</pre></main>`,
+		"deep": `<!doctype html>` + deepNest(60) + `<div hidden>gone</div><div style="display:none">none</div><div style="visibility:hidden">invisible</div><div style="opacity:0">clear</div><template><b>t</b></template><noscript>ns</noscript>`,
 	}
 }
 

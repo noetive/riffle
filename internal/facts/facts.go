@@ -21,6 +21,21 @@ const (
 	ToneMuted Tone = "muted"
 )
 
+// Preserve is how much of the whitespace a text is written with a person
+// sees (CSS Text 3, white-space).
+type Preserve uint8
+
+// Preserve values.
+const (
+	// PreserveNone collapses whitespace, line breaks included.
+	PreserveNone Preserve = iota
+	// PreserveBreaks keeps line breaks and collapses spaces: pre-line.
+	PreserveBreaks
+	// PreserveSpaces keeps line breaks and spaces: pre, pre-wrap,
+	// break-spaces.
+	PreserveSpaces
+)
+
 // Node holds the facts of one snapshot node, at the same index.
 type Node struct {
 	// Role is the ARIA-like role, "" for generic nodes.
@@ -48,6 +63,9 @@ type Node struct {
 	// Label and Error are text nodes associated by proximity, or snapshot.None.
 	Label, Error int32
 
+	// Preserve is what the node's white-space keeps of the line breaks and
+	// spaces its text is written with; Text has them collapsed regardless.
+	Preserve Preserve
 	// Hidden: generates no visible box (display, visibility, opacity, size).
 	Hidden bool
 	// Offscreen: the box lies outside the scrollable document.

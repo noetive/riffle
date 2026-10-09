@@ -74,6 +74,10 @@ type Line struct {
 	class  int // drop order, higher is dropped first
 	rank   int // within a class, lower is kept first: 0 for headings
 	parent int // index of the enclosing line, -1 for none
+	// close is the index of the fence that closes a code block this line
+	// opens, 0 for a line that opens none. The lines after it, the closing
+	// fence included, have this line as their parent.
+	close int
 }
 
 // expandKey is the backend id a ref for this line is made for.

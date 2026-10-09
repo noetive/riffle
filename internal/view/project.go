@@ -103,6 +103,8 @@ func (c *compiler) markdown(out *[]Line, it *item, depth int) {
 		return
 	case it.heading > 0:
 		add(strings.Repeat("#", it.heading)+" "+c.textOf(it.node), depth)
+	case it.code || lined(it):
+		c.fence(out, it, depth, "")
 	case it.textRun:
 		add(c.md(it), depth)
 	case it.head == "frame":
@@ -138,6 +140,63 @@ func (c *compiler) markdown(out *[]Line, it *item, depth int) {
 	}
 }
 
+// fence writes text of more than one line, a <pre> block or other
+// preformatted text, as a fenced code block (CommonMark 0.31, 4.5), a line
+// for each of its lines, after bullet when it is a list entry. Out of a
+// fence, a line the page wrote would pass for a line of Riffle's own. Links
+// are their names: Markdown is not read inside the block. The lines after the
+// opening fence are its children, which the budget keeps together with their
+// closing fence.
+func (c *compiler) fence(out *[]Line, it *item, depth int, bullet string) {
+	var sb strings.Builder
+	for _, s := range it.segs {
+		if s.link != nil {
+			sb.WriteString(unquoted(s.link.name))
+		} else {
+			sb.WriteString(s.text)
+		}
+	}
+	code := sb.String()
+	mark := fenceFor(code)
+	open := len(*out)
+	*out = append(*out, Line{Key: it.key, anchor: it.block, Indent: depth, Body: bullet + mark, class: it.class, parent: -1})
+	if bullet != "" {
+		depth++ // the block goes on under its bullet
+	}
+	for _, l := range strings.Split(code, "\n") {
+		*out = append(*out, Line{anchor: it.block, Indent: depth, Body: l, class: it.class, parent: open})
+	}
+	(*out)[open].close = len(*out)
+	*out = append(*out, Line{anchor: it.block, Indent: depth, Body: mark, class: it.class, parent: open})
+}
+
+// fenceFor is a fence that nothing in code can close: backticks, or tildes
+// when the code holds a run of three backticks, as code about Markdown does,
+// so that an inner fence does not look like the end; failing both, more
+// backticks than any run of them in the code.
+func fenceFor(code string) string {
+	run := func(c rune) int {
+		n, longest := 0, 0
+		for _, r := range code {
+			if r == c {
+				n++
+				longest = max(longest, n)
+			} else {
+				n = 0
+			}
+		}
+		return longest
+	}
+	switch ticks := run('`'); {
+	case ticks < 3:
+		return "```"
+	case run('~') < 3:
+		return "~~~"
+	default:
+		return strings.Repeat("`", ticks+1)
+	}
+}
+
 func (c *compiler) markdownItem(out *[]Line, it *item, depth int) {
 	if len(it.kids) == 0 && !it.textRun {
 		// An entry that is a single link or control reads as that, marked as
@@ -159,6 +218,9 @@ func (c *compiler) markdownItem(out *[]Line, it *item, depth int) {
 		case k.head == "frame":
 			// A frame is a line of its own, never words of the item.
 			frames = append(frames, k)
+		case k.code || lined(k):
+			// Lines of their own, under the bullet: a cell is one line.
+			nested = append(nested, k)
 		case k.textRun:
 			cells = append(cells, piece{text: c.md(k), key: k.key})
 		case k.head == "link":
@@ -194,6 +256,15 @@ func (c *compiler) markdownItem(out *[]Line, it *item, depth int) {
 	if len(it.kids) == 0 && it.textRun {
 		cells = append(cells, piece{text: c.md(it)})
 	}
+	if len(cells) == 0 && len(frames) == 0 && len(nested) > 0 && (nested[0].code || lined(nested[0])) {
+		// An entry that starts with lines of text, such as an address or a
+		// step that is a command, carries its bullet on the fence.
+		c.fence(out, nested[0], depth, "- ")
+		for _, k := range nested[1:] {
+			c.markdown(out, k, depth+1)
+		}
+		return
+	}
 	if len(cells) == 0 {
 		// An entry with no words of its own, as a row of cards or an item that
 		// holds only frames, is its blocks: a bare "- " would say nothing.
@@ -225,6 +296,8 @@ func (c *compiler) markdownItem(out *[]Line, it *item, depth int) {
 // cellText renders the readable content of an item on one line.
 func (c *compiler) cellText(it *item) string {
 	switch {
+	case it.code || lined(it):
+		return words(c.md(it)) // a cell is one line
 	case it.textRun:
 		return c.md(it)
 	case it.head == "link":

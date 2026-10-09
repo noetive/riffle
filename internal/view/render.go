@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/noetive/riffle/internal/facts"
 	"github.com/noetive/riffle/internal/snapshot"
 )
 
@@ -109,10 +110,15 @@ func (c *compiler) segParts(it *item, parentCover int32) []string {
 			parts = append(parts, c.inline(s.link, parentCover))
 			continue
 		}
-		parts = append(parts, quoteText(s.text, c.textLimit()))
+		text := words(s.text)
+		if s.pre != facts.PreserveNone {
+			// Its lines stay apart, quoted as "\n", so it is still one line.
+			text = s.text
+		}
+		parts = append(parts, strconv.Quote(clip(text, c.textLimit())))
 		// Text cut to the line limit is followed by the ref that expand opens,
 		// as text cut to a budget is.
-		if utf8.RuneCountInString(words(s.text)) > c.textLimit() {
+		if utf8.RuneCountInString(text) > c.textLimit() {
 			if key := it.block; key != 0 && c.expandable(key) {
 				parts = append(parts, c.rt.get(key, "r"))
 			}
@@ -154,11 +160,21 @@ func flat(it *item) bool {
 		return false
 	}
 	for _, k := range it.kids {
-		if !k.leaf {
+		if !k.leaf || lined(k) {
 			return false
 		}
 	}
 	return true
+}
+
+// lined: the item is text of more than one line, which is no cell of a row.
+func lined(it *item) bool {
+	for _, s := range it.segs {
+		if s.pre != facts.PreserveNone && strings.Contains(s.text, "\n") {
+			return true
+		}
+	}
+	return false
 }
 
 func countLinks(it *item) (links, nodes int) {

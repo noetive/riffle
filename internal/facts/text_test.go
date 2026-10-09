@@ -3,6 +3,7 @@ package facts_test
 import (
 	"testing"
 
+	"github.com/noetive/riffle/internal/facts"
 	pb "github.com/noetive/riffle/internal/facts/pagebuilder"
 	"github.com/noetive/riffle/internal/snapshot"
 )
@@ -483,5 +484,24 @@ func TestTextPaintedThroughItsGlyphsIsSeen(t *testing.T) {
 	i := b.Text(span, "Example Product")
 	if analyze(b).Nodes[i].Unseen {
 		t.Error("text under an ancestor whose background is clipped to text is seen")
+	}
+}
+
+func TestPreserveFollowsTheInheritedWhiteSpace(t *testing.T) {
+	for ws, want := range map[string]facts.Preserve{
+		"pre": facts.PreserveSpaces, "pre-wrap": facts.PreserveSpaces, "break-spaces": facts.PreserveSpaces,
+		"pre-line": facts.PreserveBreaks, "preserve-breaks nowrap": facts.PreserveBreaks, "break-spaces nowrap": facts.PreserveSpaces,
+		"preserve nowrap": facts.PreserveSpaces, "normal": facts.PreserveNone, "collapse nowrap": facts.PreserveNone, "nowrap": facts.PreserveNone, "": facts.PreserveNone,
+	} {
+		b := pb.New(1280, 800)
+		d := b.El(b.Body(), "div", R(0, 0, 300, 40), pb.Style(snapshot.WhiteSpace, ws))
+		i := b.Text(b.El(d, "span", R(0, 0, 300, 40), pb.Inline()), "a\n  b")
+		nd := analyze(b).Nodes[i]
+		if nd.Preserve != want {
+			t.Errorf("white-space %q: Preserve = %v, want %v", ws, nd.Preserve, want)
+		}
+		if nd.Text != "a b" {
+			t.Errorf("white-space %q: Text = %q, want it collapsed", ws, nd.Text)
+		}
 	}
 }

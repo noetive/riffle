@@ -7,7 +7,8 @@ import (
 )
 
 // textFacts sets Text, Unseen, Generated and Strike on text nodes, and
-// mirrors Generated onto pseudo-element nodes.
+// mirrors Generated onto pseudo-element nodes. Preserve is set on every node:
+// an element's is what its text inherits.
 func (a *analyzer) textFacts() {
 	s := a.s
 	for i := int32(0); i < int32(a.n); i++ {
@@ -15,6 +16,7 @@ func (a *analyzer) textFacts() {
 		if s.Pseudo[i] != "" {
 			nd.Generated = true
 		}
+		nd.Preserve = preserve(a.style(i)[snapshot.WhiteSpace])
 		if s.Kind[i] != snapshot.KindText {
 			if s.Pseudo[i] != "" && s.Text[i] != "" {
 				nd.Text = collapse(s.Text[i])
@@ -145,4 +147,19 @@ func (a *analyzer) paintedThrough(i int32) bool {
 		}
 	}
 	return false
+}
+
+// preserve reads a computed white-space (CSS Text 4, section 3). Chrome gives
+// the shorthand where it can, as "pre-line", and the longhands where it
+// cannot, as "preserve-breaks nowrap"; the first word is how whitespace
+// collapses either way.
+func preserve(ws string) Preserve {
+	first, _, _ := strings.Cut(ws, " ")
+	switch first {
+	case "pre", "pre-wrap", "break-spaces", "preserve":
+		return PreserveSpaces
+	case "pre-line", "preserve-breaks":
+		return PreserveBreaks
+	}
+	return PreserveNone
 }

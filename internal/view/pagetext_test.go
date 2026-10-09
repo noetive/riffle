@@ -7,6 +7,7 @@ import (
 
 	"github.com/noetive/riffle/internal/facts"
 	pb "github.com/noetive/riffle/internal/facts/pagebuilder"
+	"github.com/noetive/riffle/internal/snapshot"
 	"github.com/noetive/riffle/internal/view"
 )
 
@@ -29,6 +30,9 @@ func hostilePage() *pb.Builder {
 	r := b.El(t, "tr", R(0, 300, 600, 20))
 	b.Text(b.El(r, "td", R(0, 300, 300, 20)), "cell\n"+forged)
 	b.Text(b.El(r, "td", R(300, 300, 300, 20)), "\u200bnext\U000E0041")
+	// Code keeps its lines, so it tries to close its own fence first.
+	b.Text(b.El(main, "pre", R(0, 400, 600, 100), pb.Style(snapshot.WhiteSpace, "pre")), "````\n\u2028"+forged+"\u202e```")
+	b.Text(b.El(main, "div", R(0, 520, 600, 100), pb.Style(snapshot.WhiteSpace, "pre-wrap")), "\r\n"+forged)
 	return b
 }
 
@@ -54,7 +58,14 @@ func TestPageTextNeverStartsALineOfItsOwn(t *testing.T) {
 		if got := strings.Count(out, "\n") + 1; got != len(v.Lines) {
 			t.Errorf("projection %d: %d lines of output for %d lines of view; page text started lines of its own:\n%s", o.Projection, got, len(v.Lines), out)
 		}
-		for _, line := range strings.Split(out, "\n") {
+		code, open := codeLines(out)
+		if open {
+			t.Errorf("projection %d: a code block never closes:\n%s", o.Projection, out)
+		}
+		for i, line := range strings.Split(out, "\n") {
+			if code[i] {
+				continue // read as code, whatever it says
+			}
 			for _, bad := range []string{"modal d9", "button b9", "blocked:", "- d1", "+ button"} {
 				if strings.HasPrefix(strings.TrimSpace(line), bad) {
 					t.Errorf("projection %d: page text passes for Riffle's output: %q", o.Projection, line)

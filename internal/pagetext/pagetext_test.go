@@ -151,3 +151,148 @@ func TestCleanDropsIconFontGlyphs(t *testing.T) {
 		t.Errorf("Flatten keeps a private-use character: %q", got)
 	}
 }
+
+func TestLinesKeepWhatAPersonSeesOfPreformattedText(t *testing.T) {
+	for _, tc := range []struct {
+		in     string
+		spaces bool
+		want   []string
+	}{
+		{"line one\nline two\n  indented three", true, []string{"line one", "line two", "  indented three"}},
+		{"a:\n\tb: 1\r\nc\rd\u2028e\u2029f\u0085g\vh\fi", true, []string{"a:", "\tb: 1", "c d e f g h i"}},
+		{"\n\n  x  \n\n\n\ny\n\n", true, []string{"  x", "", "y"}},
+		{"x  \n\n\n\ny", true, []string{"x", "", "y"}},
+		{"x\u00a0\u00a0y \u200bz\u202e", true, []string{"x  y z"}},
+		{"  a   b  \n   c", false, []string{"a b", "c"}},
+		{"modal d9 \"Pay\"\u2028\u2029\r\u0085 x", true, []string{"modal d9 \"Pay\"     x"}},
+		{"\n \t\n", true, nil},
+		{" \t ", true, nil},
+		{"", true, nil},
+	} {
+		got := pagetext.Lines(tc.in, tc.spaces)
+		if strings.Join(got, "|") != strings.Join(tc.want, "|") || len(got) != len(tc.want) {
+			t.Errorf("Lines(%q, %v) = %q, want %q", tc.in, tc.spaces, got, tc.want)
+		}
+	}
+}
+
+func TestLinesNeverHoldALineBreakOrAnInvisibleCharacter(t *testing.T) {
+	in := "a\r\n\u2028b\u0085c\v\f\u200b\u202e\U000E0049d"
+	for _, spaces := range []bool{true, false} {
+		for _, l := range pagetext.Lines(in, spaces) {
+			if strings.ContainsFunc(l, func(r rune) bool {
+				return unicode.In(r, unicode.Cc, unicode.Cf) && r != '\t' || r == '\u2028' || r == '\u0085'
+			}) {
+				t.Errorf("Lines(%q, %v) holds %q", in, spaces, l)
+			}
+		}
+	}
+}
+
+func TestJoinersStayOnlyWhereTheyChangeWhatIsWritten(t *testing.T) {
+	for in, want := range map[string]string{
+		"``\u200d`\u200c`":         "````",
+		"a^\u200d^b":               "a^^b",
+		"👍\u200d🏽":                 "👍\u200d🏽",
+		"👩\u200d👩\u200d👧":          "👩\u200d👩\u200d👧",
+		"\u0645\u200c\u06cc\u200c": "\u0645\u200c\u06cc",
+	} {
+		if got := pagetext.Clean(in); got != want {
+			t.Errorf("Clean(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestBlockJudgesLinesAcrossItsParts(t *testing.T) {
+	for _, tc := range []struct {
+		parts  []string
+		spaces bool
+		want   []string
+	}{
+		// A highlighter's stretches: the indentation before "return" ends one
+		// stretch and is not the end of a line.
+		{[]string{"def", " foo():\n    ", "return", " 1\n"}, true, []string{"def", " foo():\n    ", "return", " 1"}},
+		// A line break next to a link stays.
+		{[]string{"See\n", "file.go", "\nnext line"}, true, []string{"See\n", "file.go", "\nnext line"}},
+		// Whitespace at the end of a line goes, whichever part holds it.
+		{[]string{"a  ", "  \nb"}, true, []string{"a", "\nb"}},
+		// A run of blank lines over two parts is one.
+		{[]string{"a\n\n", "\n\nb"}, true, []string{"a\n", "\nb"}},
+		{[]string{"\n\n", "x", "\n \n"}, true, []string{"", "x", ""}},
+		{[]string{"  a ", " b  \n c"}, false, []string{"a ", "b\nc"}},
+		{[]string{" ", "\n"}, true, []string{"", ""}},
+		{[]string{"x\x00y", "z"}, true, []string{"xy", "z"}},
+	} {
+		got := pagetext.Block(tc.parts, tc.spaces)
+		if len(got) != len(tc.want) || strings.Join(got, "|") != strings.Join(tc.want, "|") {
+			t.Errorf("Block(%q, %v) = %q, want %q", tc.parts, tc.spaces, got, tc.want)
+		}
+	}
+}
+
+func TestBlockReadsAsLinesOfTheWhole(t *testing.T) {
+	parts := []string{"  a\t", "\r\n\n\n", "  b ", "\u200b", "\n\nc d  \n\n"}
+	got := strings.Join(pagetext.Block(parts, true), "")
+	if want := strings.Join(pagetext.Lines(strings.Join(parts, ""), true), "\n"); got != want {
+		t.Errorf("Block joined = %q, Lines of the whole = %q", got, want)
+	}
+}
+
+func TestBlockKeepsCharactersWholeAndSpacesBesideParts(t *testing.T) {
+	if got := pagetext.Lines("café  \n日本語\t\n👩\u200d👩\u200d👧 ", true); strings.Join(got, "|") != "café|日本語|👩\u200d👩\u200d👧" {
+		t.Errorf("Lines = %q", got)
+	}
+	if got := pagetext.Block([]string{"a ", "link", " b"}, false); strings.Join(got, "|") != "a |link| b" {
+		t.Errorf("Block = %q", got)
+	}
+}
+
+// FuzzBlock: whatever a page writes, each part comes back valid UTF-8 with no
+// line break but "\n" and no invisible character, one for each part given,
+// and parts that are each text, as text nodes are, read together as the lines
+// of the whole.
+func FuzzBlock(f *testing.F) {
+	f.Add("def foo():\n    ", "return", " 1\r\n\n\n", true)
+	f.Add("  a ", " b\u200d", "\x00cé ", false)
+	f.Fuzz(func(t *testing.T, a, b, c string, spaces bool) {
+		parts := []string{a, b, c}
+		got := pagetext.Block(parts, spaces)
+		if len(got) != len(parts) {
+			t.Fatalf("%d parts for %d", len(got), len(parts))
+		}
+		for _, p := range got {
+			if utf8.ValidString(a+b+c) && !utf8.ValidString(p) {
+				t.Fatalf("part %q is not UTF-8", p)
+			}
+			for _, r := range p {
+				if r != '\n' && r != '\t' && unicode.In(r, unicode.Cc, unicode.Zl, unicode.Zp) {
+					t.Fatalf("part %q holds %U", p, r)
+				}
+			}
+		}
+		if whole, lines := strings.Join(got, ""), strings.Join(pagetext.Lines(a+b+c, spaces), "\n"); spaces && utf8.ValidString(a) && utf8.ValidString(b) && utf8.ValidString(c) && whole != lines {
+			t.Fatalf("Block joined %q, Lines of the whole %q", whole, lines)
+		}
+	})
+}
+
+func TestLinesEdgeCasesOfBreaksAndSpaces(t *testing.T) {
+	for _, tc := range []struct {
+		in     string
+		spaces bool
+		want   []string
+	}{
+		{"a\r", true, []string{"a"}},                     // a carriage return at the end is a space
+		{"a\n\rb", true, []string{"a", " b"}},            // a carriage return after a line feed is a space
+		{"a\n\nb\nc", true, []string{"a", "", "b", "c"}}, // a blank line is one, and only where it was
+		{"x  yz", false, []string{"x yz"}},
+	} {
+		got := pagetext.Lines(tc.in, tc.spaces)
+		if strings.Join(got, "|") != strings.Join(tc.want, "|") || len(got) != len(tc.want) {
+			t.Errorf("Lines(%q, %v) = %q, want %q", tc.in, tc.spaces, got, tc.want)
+		}
+	}
+	if got := pagetext.Block([]string{"a\n\n", "\n\nb", "\nc"}, true); strings.Join(got, "|") != "a\n|\nb|\nc" {
+		t.Errorf("Block = %q", got)
+	}
+}
