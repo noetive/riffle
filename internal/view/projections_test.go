@@ -357,7 +357,19 @@ func TestControlFactsAreTrailingTags(t *testing.T) {
 		`tab b1 "Tab1" selected`,
 		`button b2 "Truncated text here" truncated`,
 		`link a1 "Old link" strike green`,
-		`button b3 "Close dialog" name-differs`,
+		`button b3 "Close dialog" name-differs="x"`,
+	)
+}
+
+// The words on a control whose hidden label contradicts them are what a person
+// reads and what a text target answers to, so the view gives them, clipped.
+func TestNameDiffersGivesTheWordsAPersonReads(t *testing.T) {
+	b := pb.New(1280, 800)
+	shown := "Checkout " + strings.Repeat("now ", 30)
+	b.Text(b.El(b.Body(), "button", R(0, 0, 100, 20), pb.Attr("aria-label", "Delete account")), shown)
+	sameLines(t, view.Compile(facts.Analyze(b.Snapshot()), view.Options{Projection: view.Interactive}),
+		`page shop.example/cart "Cart" 1280x800`,
+		`button b1 "Delete account" name-differs="`+shown[:80]+`…"`,
 	)
 }
 

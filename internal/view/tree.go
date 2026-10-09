@@ -267,7 +267,8 @@ func (c *compiler) base(n int32, head, kind string) *item {
 	nd := c.fact(n)
 	it := &item{node: n, key: c.s.Backend[n], head: head, kind: kind, cover: nd.CoveredBy, box: c.s.Box[n], runPos: -1, class: classNone}
 	if nd.Shown != "" {
-		it.tags = append(it.tags, "name-differs")
+		// The words a person reads are what a text target answers to.
+		it.tags = append(it.tags, "name-differs="+quoteText(nd.Shown, 80))
 	}
 	if nd.NameUnseen {
 		it.tags = append(it.tags, "unseen-name")

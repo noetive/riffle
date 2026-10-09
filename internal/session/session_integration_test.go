@@ -266,11 +266,34 @@ func TestTextTargetsFollowWhatAPersonReadsNotAHiddenLabel(t *testing.T) {
 	s, ctx := newSession(t, srv.URL)
 
 	view := s.Run(ctx, "goto "+srv.URL+"\nview interactive")
-	if !strings.Contains(view, "name-differs") {
-		t.Errorf("the contradicting label must be flagged:\n%s", view)
+	if !strings.Contains(view, `name-differs="Cancel"`) {
+		t.Errorf("the contradicting label must be flagged with the words a person reads:\n%s", view)
 	}
-	if out := s.Run(ctx, `click "Confirm payment"`); !strings.Contains(out, "failed") || strings.Contains(out, "paid") {
+	out := s.Run(ctx, `click "Confirm payment"`)
+	if !strings.Contains(out, "failed") || strings.Contains(out, "paid") {
 		t.Errorf("a hidden label must not be a way to click something a person reads differently:\n%s", out)
+	}
+	if !strings.Contains(out, `hidden label of b1, which reads "Cancel"`) {
+		t.Errorf("the refusal must give the words a person reads and the ref:\n%s", out)
+	}
+	if out := s.Run(ctx, "click \"Cancel\"\nexpect text \"paid\""); strings.Contains(out, "failed") {
+		t.Errorf("the words the view gives must reach the control:\n%s", out)
+	}
+}
+
+func TestARefusalNamesNoHiddenLabelTwoControlsShare(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<button aria-label="Confirm payment">Cancel</button><button aria-label="Confirm payment">Back</button>`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	s, ctx := newSession(t, srv.URL)
+
+	out := s.Run(ctx, "goto "+srv.URL+"\nclick \"Confirm payment\"")
+	if !strings.Contains(out, "failed") || strings.Contains(out, "hidden label of") {
+		t.Errorf("a hidden label shared by two controls must be refused without naming either:\n%s", out)
 	}
 }
 

@@ -422,6 +422,11 @@ func (c *scene) byText(text string) (int32, error) {
 		if title, ok := c.frameTitled(want); ok {
 			return 0, fmt.Errorf("not found: %q is inside the embedded frame %q, which Riffle cannot read or act in; tell the user this step is theirs", text, title)
 		}
+		// A hidden label that contradicts the words on its control is never a
+		// target, but the refusal says what a person reads there instead.
+		if i, ok := c.labelledOtherwise(want); ok {
+			return 0, fmt.Errorf("%w: %q is only the hidden label of %s, which reads %q; target it by those words or its ref, and tell the user both", errNotFound, text, c.refsOf(text, []int32{i})[0], clipText(pagetext.Clean(c.page.Nodes[i].Shown), 80))
+		}
 		return 0, fmt.Errorf("%w: nothing actionable is named %q; run `find %q` or `view interactive`", errNotFound, text, text)
 	}
 	cands := visible
@@ -472,6 +477,23 @@ func (c *scene) shownWords(t program.Target) (int32, bool) {
 		return snapshot.None, false
 	}
 	return found[0], true
+}
+
+// labelledOtherwise finds the one visible control whose hidden label is the
+// name while the words a person reads on it say something else. More than one
+// is no answer, so the refusal never lists hidden labels.
+func (c *scene) labelledOtherwise(want string) (int32, bool) {
+	found := snapshot.None
+	for i, n := range c.page.Nodes {
+		if c.page.Snap.Kind[i] != snapshot.KindElement || n.Shown == "" || !n.Visible() || strings.ToLower(pagetext.Clean(n.Name)) != want {
+			continue
+		}
+		if found != snapshot.None {
+			return snapshot.None, false
+		}
+		found = int32(i)
+	}
+	return found, found != snapshot.None
 }
 
 // hiddenNamed lists the hidden controls whose text or label is the name. A
@@ -695,17 +717,10 @@ func (c *scene) similar(text string, near []int32) error {
 // describe lists nodes as "ref role name", registering refs for nodes the
 // last view left out so every candidate can be targeted.
 func (c *scene) describe(text string, nodes []int32) string {
-	c.remember(view.Compile(c.page, view.Options{Projection: view.Find, Query: text, Previous: c.refs, Focus: c.page.Snap.Focus}))
-	back := map[int64]string{}
-	for r, b := range c.refs {
-		back[b] = r
-	}
+	refs := c.refsOf(text, nodes)
 	var parts []string
-	for _, i := range nodes {
-		ref := back[c.page.Snap.Backend[i]]
-		if ref == "" {
-			ref = "(no ref: run `find`)"
-		}
+	for k, i := range nodes {
+		ref := refs[k]
 		role := c.page.Nodes[i].Role
 		if role == "" {
 			role = "clickable"
@@ -713,6 +728,24 @@ func (c *scene) describe(text string, nodes []int32) string {
 		parts = append(parts, fmt.Sprintf("%s %s %q", ref, role, c.page.Nodes[i].Name))
 	}
 	return strings.Join(parts, "; ")
+}
+
+// refsOf gives the ref of each node, registering refs for nodes the last view
+// left out so every one can be targeted.
+func (c *scene) refsOf(text string, nodes []int32) []string {
+	c.remember(view.Compile(c.page, view.Options{Projection: view.Find, Query: text, Previous: c.refs, Focus: c.page.Snap.Focus}))
+	back := map[int64]string{}
+	for r, b := range c.refs {
+		back[b] = r
+	}
+	refs := make([]string, len(nodes))
+	for k, i := range nodes {
+		refs[k] = back[c.page.Snap.Backend[i]]
+		if refs[k] == "" {
+			refs[k] = "(no ref: run `find`)"
+		}
+	}
+	return refs
 }
 
 // Outcome is a reply plus whether the program stopped before its end.

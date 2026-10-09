@@ -178,7 +178,7 @@ Riffle also says so when a step did not do what it asked, such as a form that wa
 
 - Secrets are written as `$secret:name`, tied to one origin, and never shown back to the agent.
 - Text a person couldn't see on the page is counted, and shown only when you ask, inside a marker that says it's page data.
-- A control whose hidden label contradicts the words on it is flagged `name-differs`.
+- A control whose hidden label contradicts the words on it is flagged `name-differs`, which also gives the words a person sees.
 - Page text is data. Replies quote it, so a page can't pass it off as your instructions.
 - Local and private network addresses are off until you turn them on with `-allow-private`, so a page cannot send the agent into your network or a cloud metadata service.
 - Uploads and `eval` are off until you turn them on. `-allow-origin` and `-upload-dir` limit where a session can go and what it can send. A Riffle that restarts after a crash keeps the limits it was given.
