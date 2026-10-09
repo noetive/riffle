@@ -1,6 +1,6 @@
 module github.com/noetive/riffle
 
-go 1.26.9
+go 1.27.2
 
 require (
 	github.com/goccy/go-json v0.11.2
