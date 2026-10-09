@@ -11,7 +11,7 @@ const { capture, put, sandbox } = require("./helpers");
 test("init --client claude-code writes the entry and the skill", async (t) => {
   const { ctx } = sandbox(t);
   const io = capture();
-  assert.equal(await run(["init", "--client", "claude-code", "--scope", "project"], { io, ctx }), 0);
+  assert.equal(await run(["init", "--client", "claude-code", "--scope", "project"], { io, ctx: { ...ctx, platform: "linux" } }), 0);
 
   const doc = JSON.parse(readFileSync(join(ctx.workspace, ".mcp.json"), "utf8"));
   assert.deepEqual(doc.mcpServers.riffle.args, ["-y", "@noetive/riffle", "mcp"]);
@@ -112,7 +112,13 @@ test("bad flags are rejected", () => {
 test("init --keep-state writes an entry that keeps the agent signed in", async (t) => {
   const { ctx } = sandbox(t);
   const io = capture();
-  assert.equal(await run(["init", "--client", "claude-code", "--scope", "project", "--keep-state", "shop"], { io, ctx }), 0);
+  assert.equal(
+    await run(["init", "--client", "claude-code", "--scope", "project", "--keep-state", "shop"], {
+      io,
+      ctx: { ...ctx, platform: "linux" },
+    }),
+    0,
+  );
   const doc = JSON.parse(readFileSync(join(ctx.workspace, ".mcp.json"), "utf8"));
   assert.deepEqual(doc.mcpServers.riffle.args, ["-y", "@noetive/riffle", "mcp", "-keep-state", "shop"]);
 });
