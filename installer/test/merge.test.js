@@ -90,6 +90,29 @@ test("the entry runs the wrapper with the mcp argument and needs no key", () => 
   assert.equal(entry.env, undefined);
 });
 
+test("on Windows the entry runs npx through cmd, elsewhere directly", (t) => {
+  for (const [platform, command, prefix] of [
+    ["win32", "cmd", ["/c", "npx"]],
+    ["linux", "npx", []],
+    ["darwin", "npx", []],
+  ]) {
+    const { ctx } = sandbox(t);
+    install(spec, "user", { ...ctx, platform }, { keepState: "shop" });
+    const entry = json(pathOf(ctx)).mcpServers.riffle;
+    assert.equal(entry.command, command, platform);
+    assert.deepEqual(entry.args, [...prefix, "-y", "@noetive/riffle", "mcp", "-keep-state", "shop"], platform);
+  }
+});
+
+test("init on Windows replaces an entry that runs npx directly, then leaves it alone", (t) => {
+  const { ctx } = sandbox(t);
+  const win = { ...ctx, platform: "win32" };
+  install(spec, "user", { ...ctx, platform: "linux" });
+  assert.equal(install(spec, "user", win).changed, true);
+  assert.equal(json(pathOf(ctx)).mcpServers.riffle.command, "cmd");
+  assert.equal(install(spec, "user", win).changed, false);
+});
+
 test("client extras and top-level key follow the editor", (t) => {
   const { ctx } = sandbox(t);
   const copilot = clientSpec("copilot");

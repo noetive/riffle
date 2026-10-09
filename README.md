@@ -110,6 +110,8 @@ Any MCP client can use this entry:
 }
 ```
 
+On native Windows, run npx through cmd: `"command": "cmd", "args": ["/c", "npx", "-y", "@noetive/riffle", "mcp"]`. `init` writes this form for you.
+
 Or install the binary: `go install github.com/noetive/riffle/cmd/riffle@latest`, or take one from the [releases](https://github.com/noetive/riffle/releases).
 
 Riffle needs Chrome or Chromium on the machine. Check with:

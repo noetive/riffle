@@ -27,4 +27,6 @@ For an editor not listed, such as Codex, add this server by hand:
 { "mcpServers": { "riffle": { "command": "npx", "args": ["-y", "@noetive/riffle", "mcp"] } } }
 ```
 
+On native Windows, run npx through cmd: `"command": "cmd", "args": ["/c", "npx", "-y", "@noetive/riffle", "mcp"]`.
+
 ISC. Copyright (c) 2026 Noetive.io

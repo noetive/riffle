@@ -79,10 +79,14 @@ function defaultScope(spec) {
   return named ? named[0] : Object.keys(spec.scopes)[0];
 }
 
-// `ctx` is { home, workspace }, passed explicitly so tests never touch the
-// real home directory.
+// `ctx` is { home, workspace, platform }, passed explicitly so tests never
+// touch the real home directory and can write either platform's entry.
 function context(overrides = {}) {
-  return { home: overrides.home ?? homedir(), workspace: overrides.workspace ?? process.cwd() };
+  return {
+    home: overrides.home ?? homedir(),
+    workspace: overrides.workspace ?? process.cwd(),
+    platform: overrides.platform ?? process.platform,
+  };
 }
 
 function expandPath(template, ctx) {
@@ -140,8 +144,16 @@ function stateName(name) {
 // The entry editors run. `npx -y` because an editor spawns the server with no
 // terminal, and without -y npx blocks on a prompt nobody can answer. The
 // wrapper then execs the native binary with `mcp`.
-function buildEntry(spec, options = {}) {
-  const entry = { command: "npx", args: ["-y", PACKAGE_NAME, "mcp"], ...(spec.entryExtras ?? {}) };
+//
+// On Windows npx is a batch file, npx.cmd, which an editor that starts the
+// server without a shell cannot run: the server fails to start and the editor
+// shows a closed connection. cmd /c runs it. The entry follows the machine init
+// runs on, so a project file shared between Windows and other systems suits
+// only one of them.
+function buildEntry(spec, options = {}, platform = process.platform) {
+  const npx = ["npx", "-y", PACKAGE_NAME, "mcp"];
+  const [command, ...args] = platform === "win32" ? ["cmd", "/c", ...npx] : npx;
+  const entry = { command, args, ...(spec.entryExtras ?? {}) };
   if (options.keepState) entry.args.push("-keep-state", options.keepState);
   if (options.chrome) entry.env = { RIFFLE_CHROME: options.chrome };
   return entry;

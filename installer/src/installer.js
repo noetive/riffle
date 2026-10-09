@@ -27,7 +27,7 @@ function install(spec, scope, ctx, options = {}) {
 
   // Compared by value: the editor may have saved the file in its own format,
   // and re-rendering a matching entry would rewrite it for nothing.
-  const wanted = buildEntry(spec, options);
+  const wanted = buildEntry(spec, options, ctx.platform);
   if (isDeepStrictEqual(entryIn(doc, spec.topLevelKey), wanted)) return { target, changed: false };
 
   const after = configFile.setEntry(before, [spec.topLevelKey, SERVER_NAME], wanted);
