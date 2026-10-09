@@ -200,14 +200,16 @@ jobs:
           NPM_TAG: ${{ needs.release.outputs.npm_tag }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      # The gate before the one irreversible step in this job. Retried because
-      # the registry is only eventually read-your-writes.
+      # The gate before the one irreversible step in this job. Retried for five
+      # minutes, like every other registry wait here: a publish can go live a
+      # minute after npm accepts it, and the registry keeps serving the copy it
+      # cached before that for a while longer.
       - name: Every platform package resolves
         run: |
           for dir in dist/npm/*/; do
             name=$(node -p "require('./$dir/package.json').name")
             found=''
-            for _ in $(seq 1 10); do
+            for _ in $(seq 1 30); do
               if npm view "$name@$VERSION" version --prefer-online >/dev/null 2>&1; then
                 found=1
                 break
@@ -215,7 +217,7 @@ jobs:
               sleep 10
             done
             if [ -z "$found" ]; then
-              echo "::error title=Platform package missing::$name@$VERSION is not on the registry. Refusing to publish the wrapper, which would install cleanly and then find no binary on that platform."
+              echo "::error title=Platform package missing::$name@$VERSION did not resolve within five minutes. Refusing to publish the wrapper, which would install cleanly and then find no binary on that platform."
               exit 1
             fi
             echo "$name@$VERSION resolves."
