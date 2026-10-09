@@ -28,6 +28,10 @@ func Parse(result []byte) (*Snapshot, error) {
 	nodes := doc.Get("nodes")
 	parents := nodes.Get("parentIndex").Array()
 	n := len(parents)
+	if n == 0 {
+		// Every capture holds at least its document node.
+		return nil, fmt.Errorf("snapshot: capture has no nodes")
+	}
 	s := &Snapshot{
 		URL:        str(doc.Get("documentURL").Int()),
 		Title:      str(doc.Get("title").Int()),

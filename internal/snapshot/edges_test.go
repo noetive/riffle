@@ -230,3 +230,11 @@ func TestParentsMustPrecedeTheirChildrenSoTheTreeCannotLoop(t *testing.T) {
 		}
 	}
 }
+
+func TestParseRejectsACaptureWithNoNodes(t *testing.T) {
+	for _, raw := range []string{`{"documents"0`, `{"documents":[0]}`, `{"documents":[{"nodes":{"parentIndex":[]}}],"strings":[]}`} {
+		if s, err := snapshot.Parse([]byte(raw)); err == nil {
+			t.Errorf("Parse(%s) = %d nodes, want an error", raw, s.Len())
+		}
+	}
+}

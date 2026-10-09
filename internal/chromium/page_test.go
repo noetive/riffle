@@ -822,7 +822,7 @@ func TestEvalReportsScriptErrorsByFirstLine(t *testing.T) {
 func TestSnapshotCarriesTheViewport(t *testing.T) {
 	p, f := newTestPage(t)
 	f.handle = func(*fakeBrowser, rec) (string, string, bool) {
-		return `{"documents":[{"nodes":{"parentIndex":[]}}],"strings":[]}`, "", true
+		return `{"documents":[{"nodes":{"parentIndex":[-1],"nodeType":[9]}}],"strings":[]}`, "", true
 	}
 	p.width, p.height = 800, 600
 	s, err := p.Snapshot(context.Background())

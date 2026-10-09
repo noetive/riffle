@@ -57,7 +57,7 @@ func cooperative(f *fakeBrowser, r rec) (string, string, bool) {
 	case "Runtime.callFunctionOn":
 		return `{"result":{"value":true}}`, "", true
 	case "DOMSnapshot.captureSnapshot":
-		return `{"documents":[{"nodes":{"parentIndex":[]}}],"strings":[]}`, "", true
+		return `{"documents":[{"nodes":{"parentIndex":[-1],"nodeType":[9]}}],"strings":[]}`, "", true
 	case "DOM.getNodeForLocation":
 		return `{"backendNodeId":3}`, "", true
 	}
