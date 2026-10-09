@@ -19,6 +19,18 @@ test("init --client claude-code writes the entry and the skill", async (t) => {
   assert.match(skill, /^---\nname: riffle\ndescription: .+\n---/);
 });
 
+test("init mentions project approval only for a project-scope install", async (t) => {
+  const { ctx } = sandbox(t);
+  const user = capture();
+  assert.equal(await run(["init", "--client", "claude-code"], { io: user, ctx }), 0);
+  assert.match(user.lines.join("\n"), /Start a new Claude Code session/);
+  assert.doesNotMatch(user.lines.join("\n"), /approve/);
+
+  const project = capture();
+  assert.equal(await run(["init", "--client", "claude-code", "--scope", "project"], { io: project, ctx }), 0);
+  assert.match(project.lines.join("\n"), /approve project servers/);
+});
+
 test("init --dry-run writes nothing anywhere", async (t) => {
   const { ctx } = sandbox(t);
   const io = capture();

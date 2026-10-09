@@ -11,7 +11,8 @@ const PACKAGE_NAME = "@noetive/riffle";
 // one merge routine covers them all. Editors whose config is TOML or YAML
 // (Codex, Hermes) are not listed; use the JSON snippet in the README for those.
 //
-// Paths use ~ for the home directory and ${workspace} for the project.
+// Paths use ~ for the home directory and ${workspace} for the project. A scope
+// may carry a hint, printed after restartHint, for what only that scope does.
 const CLIENTS = {
   "claude-code": {
     displayName: "Claude Code",
@@ -19,10 +20,10 @@ const CLIENTS = {
     detect: ["~/.claude", "~/.claude.json"],
     scopes: {
       user: { path: "~/.claude.json", default: true },
-      project: { path: "${workspace}/.mcp.json" },
+      project: { path: "${workspace}/.mcp.json", hint: "Claude Code asks you to approve project servers on first use." },
     },
     skills: { user: "~/.claude/skills", project: "${workspace}/.claude/skills" },
-    restartHint: "Start a new Claude Code session. Project-scope servers ask for approval on first use.",
+    restartHint: "Start a new Claude Code session.",
   },
   cursor: {
     displayName: "Cursor",

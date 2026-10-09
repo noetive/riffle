@@ -117,7 +117,10 @@ async function init(flags, io, ctx) {
 
       const skillResult = installSkills(spec, scope, ctx, skills, options);
       if (skillResult.written.length > 0) io.out(`  ${options.dryRun ? "would write" : "wrote"} skill: ${skillResult.written.join(", ")}`);
-      if (result.changed && !options.dryRun) io.out(`  ${spec.restartHint}`);
+      if (result.changed && !options.dryRun) {
+        io.out(`  ${spec.restartHint}`);
+        if (spec.scopes[scope].hint) io.out(`  ${spec.scopes[scope].hint}`);
+      }
     } catch (err) {
       failed = true;
       io.err(`${id}: ${err.message}`);
