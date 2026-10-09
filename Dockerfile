@@ -7,7 +7,7 @@
 # amd64 and arm64 and is patched by Debian's security team; rebuild the image to
 # pick up browser fixes. The base images are tags, not digests: pin them by
 # digest in the build system that rebuilds this image on a schedule.
-FROM --platform=$BUILDPLATFORM golang:1.26-bookworm AS build
+FROM --platform=$BUILDPLATFORM golang:1.27-bookworm AS build
 
 ARG VERSION=docker
 ARG TARGETOS
