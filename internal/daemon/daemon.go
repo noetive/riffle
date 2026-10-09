@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -135,7 +134,12 @@ func New(cfg Config) (*Daemon, error) {
 		cfg.QuotaDir = DefaultQuotaDir()
 	}
 	if cfg.StateDir == "" {
-		cfg.StateDir = strings.TrimSuffix(cfg.Socket, filepath.Ext(cfg.Socket)) + ".state"
+		cfg.StateDir = stateDirOf(cfg.Socket)
+		if cfg.Socket == DefaultSocket() {
+			if err := seedState(cfg.StateDir, earlierStateDirs(wire.Protocol)); err != nil {
+				return nil, fmt.Errorf("daemon: %w", err)
+			}
+		}
 	}
 	seats, err := quota.Open(cfg.QuotaDir, cfg.MaxBrowsers)
 	if err != nil {
@@ -155,12 +159,7 @@ func New(cfg Config) (*Daemon, error) {
 
 // DefaultQuotaDir is where the machine's browser seats are kept: one place
 // for every daemon of the user, whatever socket each serves.
-func DefaultQuotaDir() string {
-	if dir, err := os.UserCacheDir(); err == nil {
-		return filepath.Join(dir, "riffle", "browsers")
-	}
-	return filepath.Join(os.TempDir(), "riffle-"+strconv.Itoa(os.Getuid()), "browsers")
-}
+func DefaultQuotaDir() string { return filepath.Join(riffleDir(), "browsers") }
 
 // Serve accepts connections until ctx ends, or until the daemon has had no
 // session and no client for DaemonIdle.
@@ -403,7 +402,8 @@ func (d *Daemon) dispatch(ctx context.Context, req wire.Request) wire.Reply {
 		return d.archive(ctx, req.Session)
 	case wire.Run, wire.View:
 	default:
-		return wire.Reply{Failed: true, Body: fmt.Sprintf("unknown verb %q; use run, view, close or archive", req.Verb)}
+		// handle took only verbs of wire.Verbs, and hold before this.
+		panic(fmt.Sprintf("daemon: verb %q is in wire.Verbs but nothing serves it", req.Verb))
 	}
 	sl, note, err := d.session(ctx, req.Session)
 	if err != nil {

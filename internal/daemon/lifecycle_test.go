@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"net"
@@ -407,5 +408,36 @@ func TestAnArchiveNeedsAnOpenSessionAndNeverStartsOne(t *testing.T) {
 	}
 	if page, err := c.Do(ctx, wire.Request{Verb: wire.Archive, Session: "work"}); err != nil || page != "MHTML" {
 		t.Errorf("archive of an open session = %q, %v", page, err)
+	}
+}
+
+// The daemon serves every verb its protocol has and refuses any other, so a
+// verb is only added by adding it to wire.Verbs, which changes the protocol.
+func TestTheDaemonServesExactlyTheVerbsOfItsProtocol(t *testing.T) {
+	c, _, _ := serving(t, Config{SessionIdle: time.Hour, DaemonIdle: time.Hour})
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "unix", c.socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	br := bufio.NewReader(conn)
+	ask := func(verb string) wire.Reply {
+		t.Helper()
+		if err := wire.WriteRequest(conn, wire.Request{Verb: verb, Session: "s1"}); err != nil {
+			t.Fatal(err)
+		}
+		rep, err := wire.ReadReply(br)
+		if err != nil {
+			t.Fatalf("%s: the daemon did not answer: %v", verb, err)
+		}
+		return rep
+	}
+	for _, v := range wire.Verbs {
+		if rep := ask(v); strings.Contains(rep.Body, "unknown verb") {
+			t.Errorf("%s is in protocol %d and is refused: %s", v, wire.Protocol, rep.Body)
+		}
+	}
+	if rep := ask("jump"); !rep.Failed || !strings.Contains(rep.Body, "unknown verb") {
+		t.Errorf("a verb outside the protocol is refused: %+v", rep)
 	}
 }

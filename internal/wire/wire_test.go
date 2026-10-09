@@ -190,3 +190,50 @@ func TestValidateRejectsUnframeableSessions(t *testing.T) {
 		}
 	}
 }
+
+// vocabularies is what each protocol was. A change to the verbs, the hold
+// bodies, the reply statuses or the frame headers without a new Protocol
+// would let a client reach a daemon that misreads it, so it fails here.
+var vocabularies = map[int]string{
+	2: `verbs [run view close archive hold] | hold "keep-state" -> "held keep-state " | ` +
+		`request "run s 2\nab" | replies "ok 0\n" "err 0\n" "stopped 0\n"`,
+}
+
+func vocabulary() string {
+	var req bytes.Buffer
+	_ = WriteRequest(&req, Request{Verb: Run, Session: "s", Body: "ab"})
+	reply := func(r Reply) string {
+		var b bytes.Buffer
+		_ = WriteReply(&b, r)
+		return fmt.Sprintf("%q", b.String())
+	}
+	return fmt.Sprintf("verbs %v | hold %q -> %q | request %q | replies %s %s %s",
+		Verbs, KeepState, HeldKeepingState, req.String(),
+		reply(Reply{}), reply(Reply{Failed: true}), reply(Reply{Stopped: true}))
+}
+
+func TestTheVocabularyIsTheOneItsProtocolNames(t *testing.T) {
+	got := vocabulary()
+	want, ok := vocabularies[Protocol]
+	if !ok || got != want {
+		t.Fatalf("the wire vocabulary is not the one protocol %d names; if it changed on purpose, bump Protocol to %d and record it in vocabularies.\n got: %s\nwant: %s",
+			Protocol, Protocol+1, got, want)
+	}
+	for p, v := range vocabularies {
+		if p != Protocol && v == got {
+			t.Errorf("protocol %d already named this vocabulary; a daemon of that protocol would not be told apart", p)
+		}
+	}
+}
+
+func TestAVerbIsValidOnlyWhenItsProtocolHasIt(t *testing.T) {
+	for _, v := range Verbs {
+		if err := (Request{Verb: v, Session: "s1"}).Validate(); err != nil {
+			t.Errorf("%s: %v", v, err)
+		}
+	}
+	err := (Request{Verb: "jump", Session: "s1"}).Validate()
+	if err == nil || !strings.Contains(err.Error(), "unknown verb") || !strings.Contains(err.Error(), "hold") {
+		t.Errorf("a verb the protocol does not have is refused, naming the ones it has: %v", err)
+	}
+}

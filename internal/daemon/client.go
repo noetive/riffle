@@ -18,12 +18,37 @@ import (
 )
 
 // DefaultSocket is where the daemon listens unless told otherwise: a private
-// per-user directory, so no other user can stand in for the daemon.
-func DefaultSocket() string {
-	if dir, err := os.UserCacheDir(); err == nil {
-		return filepath.Join(dir, "riffle", "riffle.sock")
+// per-user directory, so no other user can stand in for the daemon. Each wire
+// protocol has its own, so a client never reaches a daemon another Riffle
+// left running that would not understand it: that one keeps serving its own
+// clients beside this one until it idles out.
+func DefaultSocket() string { return socketFor(wire.Protocol) }
+
+// socketFor is the default socket of protocol p. Protocol 2 is the one the
+// first releases spoke, before sockets were named after a protocol, so it
+// keeps their riffle.sock.
+func socketFor(p int) string {
+	if p <= 2 {
+		return filepath.Join(riffleDir(), "riffle.sock")
 	}
-	return filepath.Join(os.TempDir(), "riffle-"+strconv.Itoa(os.Getuid()), "riffle.sock")
+	return filepath.Join(riffleDir(), fmt.Sprintf("riffle-p%d.sock", p))
+}
+
+// earlierSockets are the default sockets of the protocols before p, newest
+// first.
+func earlierSockets(p int) []string {
+	var socks []string
+	for q := p - 1; q >= 2; q-- {
+		socks = append(socks, socketFor(q))
+	}
+	return socks
+}
+
+func riffleDir() string {
+	if dir, err := os.UserCacheDir(); err == nil {
+		return filepath.Join(dir, "riffle")
+	}
+	return filepath.Join(os.TempDir(), "riffle-"+strconv.Itoa(os.Getuid()))
 }
 
 // Client talks to a daemon, starting one in the background when none is listening.
@@ -136,8 +161,18 @@ func (c *Client) connect(ctx context.Context) error {
 		return fmt.Errorf("riffle: locate own binary: %w", err)
 	}
 	// A daemon that has to be started again gets the policy it last ran
-	// with, unless this client insists on its own.
+	// with, unless this client insists on its own. The first daemon of a new
+	// protocol gets what the earlier default daemon last ran with.
 	policy := rec.Policy
+	if !recorded && c.socket == DefaultSocket() {
+		earlier, found, err := earlierRecord(earlierSockets(wire.Protocol))
+		if err != nil {
+			return fmt.Errorf("riffle: %w", err)
+		}
+		if found {
+			policy = earlier.Policy
+		}
+	}
 	if c.want != nil {
 		policy = *c.want
 	}
@@ -237,6 +272,9 @@ func (c *Client) announce() error {
 	}
 	if rep.Failed {
 		c.drop()
+		if strings.HasPrefix(rep.Body, "unknown verb") {
+			return c.older()
+		}
 		return fmt.Errorf("%s", rep.Body)
 	}
 	if c.keep {
@@ -248,6 +286,20 @@ func (c *Client) announce() error {
 		c.kept = path
 	}
 	return nil
+}
+
+// older explains a daemon from an earlier Riffle that does not know a verb
+// this client sends first: one on a socket named by hand, or one built before
+// the first release on the default socket.
+func (c *Client) older() error {
+	stop := "stop it"
+	if rec, recorded, err := readRecord(c.socket); err == nil && recorded {
+		stop = fmt.Sprintf("stop it (kill %d)", rec.PID)
+	}
+	if c.socket == DefaultSocket() {
+		return fmt.Errorf("riffle: the daemon on %s is from an earlier Riffle that does not speak protocol %d; %s and retry, and this client starts one that does", c.socket, wire.Protocol, stop)
+	}
+	return fmt.Errorf("riffle: the daemon on %s is from an earlier Riffle that does not speak protocol %d; %s and retry, or leave out -socket to use this Riffle's own daemon", c.socket, wire.Protocol, stop)
 }
 
 // keepsNoState explains a daemon too old to keep state, and how to replace it.

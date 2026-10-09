@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -27,6 +28,21 @@ const (
 	// goes the session ends.
 	Hold = "hold"
 )
+
+// Protocol names this vocabulary. A client only ever reaches a daemon that
+// speaks its protocol: the default socket is named after it, so the daemon a
+// client of another Riffle started runs beside this one rather than in its
+// way. Bump it whenever a verb, a hold body, a reply status, the frame or the
+// meaning of a reply changes; a build that changes none of them keeps it.
+//
+// The first bump is the first to run beside an earlier daemon. Two things
+// then become reachable that protocol 2 never meets: a shell's riffle view,
+// close or archive finds no session that runs on the earlier daemon, and
+// forgetting kept sign-ins means deleting the earlier protocol's copy too.
+const Protocol = 2
+
+// Verbs are every verb a daemon of this Protocol understands.
+var Verbs = []string{Run, View, Close, Archive, Hold}
 
 // KeepState is the body of a hold that asks for the session's cookies and
 // storage to be kept between its browsers. A daemon that keeps them replies
@@ -125,8 +141,12 @@ func readBody(br *bufio.Reader, n string) (string, error) {
 	return string(buf), nil
 }
 
-// Validate reports a request that cannot be framed.
+// Validate reports a request that cannot be framed, or whose verb this
+// protocol does not have.
 func (r Request) Validate() error {
+	if !slices.Contains(Verbs, r.Verb) {
+		return fmt.Errorf("unknown verb %q; protocol %d has %s", r.Verb, Protocol, strings.Join(Verbs, ", "))
+	}
 	if strings.ContainsAny(r.Session, " \n") || r.Session == "" || len(r.Session) > MaxSession {
 		return fmt.Errorf("wire: bad session name %q: one word of at most %d bytes", r.Session, MaxSession)
 	}

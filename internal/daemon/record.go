@@ -49,6 +49,19 @@ func writeRecord(socket string, p Policy) error {
 	return nil
 }
 
+// earlierRecord is the newest record beside one of the earlier protocols'
+// sockets, newest first: a daemon the operator restricted there is
+// restricted here too.
+func earlierRecord(sockets []string) (record, bool, error) {
+	for _, socket := range sockets {
+		rec, ok, err := readRecord(socket)
+		if err != nil || ok {
+			return rec, ok, err
+		}
+	}
+	return record{}, false, nil
+}
+
 // readRecord returns the record beside socket; ok is false when there is
 // none. A record that cannot be read is an error, never the default policy:
 // guessing would undo whatever the operator restricted.

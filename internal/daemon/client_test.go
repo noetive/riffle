@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -439,4 +440,164 @@ func shortDir(t *testing.T) string {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return dir
+}
+
+// privateCache points the user's cache directory, where the default sockets
+// and their state live, at a fresh directory, and returns the directory the
+// default sockets are in.
+func privateCache(t *testing.T) string {
+	t.Helper()
+	home := shortDir(t)
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "c"))
+	t.Setenv("LocalAppData", filepath.Join(home, "l"))
+	dir := filepath.Dir(DefaultSocket())
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// The released Riffles listen on riffle.sock and speak protocol 2: a client
+// of protocol 2 joins them rather than starting a second daemon beside them.
+// Every later protocol has a socket of its own.
+func TestEachProtocolHasItsOwnDefaultSocket(t *testing.T) {
+	dir := privateCache(t)
+	if got := socketFor(2); got != filepath.Join(dir, "riffle.sock") {
+		t.Errorf("protocol 2 listens on %s, not where released Riffles do", got)
+	}
+	if DefaultSocket() != socketFor(wire.Protocol) {
+		t.Errorf("the default socket %s is not protocol %d's", DefaultSocket(), wire.Protocol)
+	}
+	for p := 2; p <= 5; p++ {
+		earlier := earlierSockets(p)
+		if len(earlier) != p-2 {
+			t.Errorf("protocol %d has %d earlier sockets, want %d", p, len(earlier), p-2)
+		}
+		for i, s := range earlier {
+			if s == socketFor(p) {
+				t.Errorf("protocol %d shares its socket with an earlier one", p)
+			}
+			if want := socketFor(p - 1 - i); s != want {
+				t.Errorf("protocol %d's earlier sockets are not newest first: %v", p, earlier)
+			}
+		}
+	}
+}
+
+// A daemon the operator restricted does not come back unrestricted because
+// a new protocol's socket has no record yet.
+func TestANewProtocolsFirstDaemonKeepsTheEarlierRestrictions(t *testing.T) {
+	privateCache(t)
+	if err := writeRecord(socketFor(2), Policy{Origins: []string{"https://shop.example"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRecord(socketFor(3), Policy{AllowPrivate: true}); err != nil {
+		t.Fatal(err)
+	}
+	rec, found, err := earlierRecord(earlierSockets(4))
+	if err != nil || !found || !rec.Policy.AllowPrivate {
+		t.Errorf("protocol 4 starts with the newest earlier record, protocol 3's: %+v %v %v", rec, found, err)
+	}
+	rec, found, err = earlierRecord(earlierSockets(3))
+	if err != nil || !found || len(rec.Policy.Origins) != 1 || rec.Policy.Origins[0] != "https://shop.example" {
+		t.Errorf("protocol 3 starts with protocol 2's record: %+v %v %v", rec, found, err)
+	}
+	if err := os.Remove(socketFor(3) + ".policy"); err != nil {
+		t.Fatal(err)
+	}
+	rec, found, err = earlierRecord(earlierSockets(4))
+	if err != nil || !found || len(rec.Policy.Origins) != 1 {
+		t.Errorf("a newer socket with no record is passed over for an older one that has: %+v %v %v", rec, found, err)
+	}
+	if _, found, err := earlierRecord(earlierSockets(2)); err != nil || found {
+		t.Errorf("protocol 2 has nothing earlier to start from: %v %v", found, err)
+	}
+}
+
+func TestAnUnreadableEarlierRecordFailsClosed(t *testing.T) {
+	privateCache(t)
+	if err := os.WriteFile(socketFor(2)+".policy", []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := earlierRecord(earlierSockets(3)); err == nil || !strings.Contains(err.Error(), "unreadable") {
+		t.Errorf("a record that cannot be read is an error, never the default policy: %v", err)
+	}
+}
+
+// A daemon of protocol 2 starts again with the policy riffle.sock last ran
+// with, as released Riffles did: the earlier records do not get in its way.
+func TestADefaultDaemonStartedAgainGetsThePolicyItLastRanWith(t *testing.T) {
+	privateCache(t)
+	if err := writeRecord(DefaultSocket(), Policy{AllowEval: true}); err != nil {
+		t.Fatal(err)
+	}
+	argsFile := filepath.Join(t.TempDir(), "args")
+	t.Setenv("RIFFLE_TEST_SPAWN_ARGS", argsFile)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	c := NewClient(DefaultSocket())
+	defer c.Close()
+	go func() { _, _ = c.Exchange(ctx, wire.Request{Verb: wire.View, Session: "a"}) }()
+	var args string
+	for ctx.Err() == nil && args == "" {
+		b, _ := os.ReadFile(argsFile)
+		args = string(b)
+		time.Sleep(20 * time.Millisecond)
+	}
+	if want := "serve -socket " + DefaultSocket() + " -allow-eval"; args != want {
+		t.Errorf("started %q, want %q", args, want)
+	}
+}
+
+// Only a socket from before protocols, named by hand, reaches a daemon that
+// does not know hold; the refusal says how to get past it.
+func TestADaemonFromAnEarlierRiffleIsExplained(t *testing.T) {
+	old := newFakeServer(t, func(r wire.Request) wire.Reply {
+		return wire.Reply{Failed: true, Body: fmt.Sprintf("unknown verb %q; use run or view", r.Verb)}
+	}, 0)
+	_, err := NewClient(old.sock).Hold("a").Kept(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "earlier Riffle") || !strings.Contains(err.Error(), "leave out -socket") {
+		t.Errorf("an earlier daemon is named, with the way past it: %v", err)
+	}
+	if err != nil && (!strings.Contains(err.Error(), "stop it and retry") || strings.Contains(err.Error(), "kill")) {
+		t.Errorf("with no record of its pid, the advice is to stop it, naming no pid: %v", err)
+	}
+}
+
+// A daemon built before the first release sits on the default socket; the
+// way past it is to stop it, not to leave out a -socket nobody gave.
+func TestADaemonFromBeforeTheFirstReleaseOnTheDefaultSocketIsExplained(t *testing.T) {
+	privateCache(t)
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", DefaultSocket())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	if err := writeRecord(DefaultSocket(), Policy{}); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = c.Close() }()
+				br := bufio.NewReader(c)
+				for {
+					req, err := wire.ReadRequest(br)
+					if err != nil {
+						return
+					}
+					_ = wire.WriteReply(c, wire.Reply{Failed: true, Body: fmt.Sprintf("unknown verb %q; use run or view", req.Verb)})
+				}
+			}()
+		}
+	}()
+	_, err = NewClient(DefaultSocket()).Hold("a").Kept(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "kill "+strconv.Itoa(os.Getpid())) || strings.Contains(err.Error(), "-socket") {
+		t.Errorf("the daemon is named with the pid to stop, and no -socket advice: %v", err)
+	}
 }

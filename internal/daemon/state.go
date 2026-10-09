@@ -227,3 +227,74 @@ func write(path string, b []byte) error {
 	}
 	return os.Rename(f.Name(), path)
 }
+
+// stateDirOf is where the daemon on socket keeps sessions' state, unless
+// told otherwise: beside the socket, one directory for each socket.
+func stateDirOf(socket string) string {
+	return strings.TrimSuffix(socket, filepath.Ext(socket)) + ".state"
+}
+
+// earlierStateDirs are the state directories of the protocols before p,
+// newest first.
+func earlierStateDirs(p int) []string {
+	var dirs []string
+	for _, socket := range earlierSockets(p) {
+		dirs = append(dirs, stateDirOf(socket))
+	}
+	return dirs
+}
+
+// seedState starts a protocol's state directory, the first time, from the
+// newest earlier one there is, so an upgrade keeps what was kept before it.
+// From then on each protocol's daemon keeps its own: an earlier Riffle still
+// running goes on saving its copy and never overwrites this one, and what it
+// saves after the upgrade stays in its copy. The copy is made beside dir and
+// renamed into place, so a directory that exists was seeded whole, and one
+// that failed partway is seeded again on the next start.
+func seedState(dir string, earlier []string) error {
+	if _, err := os.Stat(dir); err == nil {
+		return nil // seeded before
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("could not read the kept state in %s: %w", dir, err)
+	}
+	for _, from := range earlier {
+		files, err := os.ReadDir(from)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("could not carry the kept state in %s over to %s: %w", from, dir, err)
+		}
+		if err := userdir.Ensure(filepath.Dir(dir)); err != nil {
+			return err
+		}
+		tmp, err := os.MkdirTemp(filepath.Dir(dir), ".seed-*")
+		if err != nil {
+			return fmt.Errorf("could not carry the kept state over to %s: %w", dir, err)
+		}
+		defer func() { _ = os.RemoveAll(tmp) }() // gone once renamed; otherwise a failed copy
+		for _, f := range files {
+			if f.IsDir() || filepath.Ext(f.Name()) != ".json" || strings.HasPrefix(f.Name(), ".") {
+				continue
+			}
+			b, err := os.ReadFile(filepath.Join(from, f.Name()))
+			if errors.Is(err, fs.ErrNotExist) {
+				continue // forgotten since it was listed
+			}
+			if err != nil {
+				return fmt.Errorf("could not carry the kept state in %s over to %s: %w; move it away to start without it", filepath.Join(from, f.Name()), dir, err)
+			}
+			if err := write(filepath.Join(tmp, f.Name()), b); err != nil {
+				return fmt.Errorf("could not carry the kept state over to %s: %w", dir, err)
+			}
+		}
+		if err := os.Rename(tmp, dir); err != nil {
+			if _, statErr := os.Stat(dir); statErr == nil {
+				return nil // another daemon starting at the same time seeded it
+			}
+			return fmt.Errorf("could not carry the kept state over to %s: %w", dir, err)
+		}
+		return nil
+	}
+	return nil
+}
