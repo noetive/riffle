@@ -113,6 +113,22 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The tag that triggered this run, not one goreleaser picks: promoting
+          # a release candidate puts a second tag on the same commit, and left to
+          # itself goreleaser releases the candidate again.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+
+      # Everything after this publishes under the tag's version, so a build
+      # stamped with any other version must stop here.
+      - name: The build carries the tag's version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          built=$(jq -r .version dist/metadata.json)
+          if [ "$built" != "$VERSION" ]; then
+            echo "::error title=Build version does not match the tag::goreleaser built ${built} for tag ${GITHUB_REF_NAME}. Nothing has been published to npm."
+            exit 1
+          fi
 
       # Attests that these exact bytes came from this workflow at this commit,
       # which lets a consumer tell a real release from a look-alike uploaded by
