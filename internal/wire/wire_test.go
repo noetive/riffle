@@ -197,18 +197,22 @@ func TestValidateRejectsUnframeableSessions(t *testing.T) {
 var vocabularies = map[int]string{
 	2: `verbs [run view close archive hold] | hold "keep-state" -> "held keep-state " | ` +
 		`request "run s 2\nab" | replies "ok 0\n" "err 0\n" "stopped 0\n"`,
+	3: `verbs [run view close archive hold stop] | hold "keep-state" -> "held keep-state " | ` +
+		`request "run s 2\nab" | stop "stop * 0\n" | replies "ok 0\n" "err 0\n" "stopped 0\n"`,
 }
 
 func vocabulary() string {
 	var req bytes.Buffer
 	_ = WriteRequest(&req, Request{Verb: Run, Session: "s", Body: "ab"})
+	var stop bytes.Buffer
+	_ = WriteRequest(&stop, Request{Verb: Stop, Session: AllSessions})
 	reply := func(r Reply) string {
 		var b bytes.Buffer
 		_ = WriteReply(&b, r)
 		return fmt.Sprintf("%q", b.String())
 	}
-	return fmt.Sprintf("verbs %v | hold %q -> %q | request %q | replies %s %s %s",
-		Verbs, KeepState, HeldKeepingState, req.String(),
+	return fmt.Sprintf("verbs %v | hold %q -> %q | request %q | stop %q | replies %s %s %s",
+		Verbs, KeepState, HeldKeepingState, req.String(), stop.String(),
 		reply(Reply{}), reply(Reply{Failed: true}), reply(Reply{Stopped: true}))
 }
 
@@ -228,12 +232,27 @@ func TestTheVocabularyIsTheOneItsProtocolNames(t *testing.T) {
 
 func TestAVerbIsValidOnlyWhenItsProtocolHasIt(t *testing.T) {
 	for _, v := range Verbs {
-		if err := (Request{Verb: v, Session: "s1"}).Validate(); err != nil {
+		session := "s1"
+		if v == Stop {
+			session = AllSessions
+		}
+		if err := (Request{Verb: v, Session: session}).Validate(); err != nil {
 			t.Errorf("%s: %v", v, err)
 		}
 	}
 	err := (Request{Verb: "jump", Session: "s1"}).Validate()
 	if err == nil || !strings.Contains(err.Error(), "unknown verb") || !strings.Contains(err.Error(), "hold") {
 		t.Errorf("a verb the protocol does not have is refused, naming the ones it has: %v", err)
+	}
+}
+
+func TestStopNamesNoSession(t *testing.T) {
+	for _, body := range []string{"", `{"policy":{}}`} {
+		if err := (Request{Verb: Stop, Session: AllSessions, Body: body}).Validate(); err != nil {
+			t.Errorf("stop of the whole daemon carrying %q refused: %v", body, err)
+		}
+	}
+	if err := (Request{Verb: Stop, Session: "s1"}).Validate(); err == nil || !strings.Contains(err.Error(), "whole daemon") {
+		t.Errorf("a stop naming a session accepted or refused without saying what stop is: %v", err)
 	}
 }

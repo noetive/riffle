@@ -3,7 +3,9 @@ package daemon
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -11,7 +13,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	json "github.com/goccy/go-json"
 
 	"github.com/noetive/riffle/internal/userdir"
 	"github.com/noetive/riffle/internal/wire"
@@ -141,17 +146,13 @@ func (c *Client) connect(ctx context.Context) error {
 	if err := userdir.Ensure(filepath.Dir(c.socket)); err != nil {
 		return fmt.Errorf("riffle: socket directory: %w", err)
 	}
-	rec, recorded, err := readRecord(c.socket)
-	if err != nil {
+	// A record that cannot be read fails here, before a daemon is started
+	// that would fail on it out of sight.
+	if _, err := LastPolicy(c.socket); err != nil {
 		return fmt.Errorf("riffle: %w", err)
 	}
 	if conn, err := (&net.Dialer{}).DialContext(ctx, "unix", c.socket); err == nil {
-		if c.want != nil && (!recorded || !same(rec.Policy, *c.want)) {
-			_ = conn.Close()
-			return c.mismatch(rec, recorded)
-		}
-		c.c, c.br = conn, bufio.NewReader(conn)
-		return nil
+		return c.accept(conn)
 	}
 	if err := ctx.Err(); err != nil {
 		return err // a caller that gave up must not leave a daemon behind
@@ -160,24 +161,17 @@ func (c *Client) connect(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("riffle: locate own binary: %w", err)
 	}
-	// A daemon that has to be started again gets the policy it last ran
-	// with, unless this client insists on its own. The first daemon of a new
-	// protocol gets what the earlier default daemon last ran with.
-	policy := rec.Policy
-	if !recorded && c.socket == DefaultSocket() {
-		earlier, found, err := earlierRecord(earlierSockets(wire.Protocol))
-		if err != nil {
-			return fmt.Errorf("riffle: %w", err)
-		}
-		if found {
-			policy = earlier.Policy
-		}
-	}
+	// A client that insists on a policy starts the daemon with it. Any other
+	// starts one that names none, which reads the policy the socket last ran
+	// with once it owns the socket, so a record read here a moment ago is
+	// never replayed over a newer one. Either only starts a daemon: one that
+	// finds another serving leaves it be, and accept judges that one.
+	args := []string{"serve", "-socket", c.socket, "-start-only"}
 	if c.want != nil {
-		policy = *c.want
+		args = append(args, c.want.Args()...)
 	}
 	// The daemon must outlive this client, so it is not tied to ctx.
-	cmd := exec.CommandContext(context.WithoutCancel(ctx), self, append([]string{"serve", "-socket", c.socket}, policy.Args()...)...)
+	cmd := exec.CommandContext(context.WithoutCancel(ctx), self, args...)
 	cmd.Stdout, cmd.Stderr = nil, nil
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("riffle: start daemon: %w", err)
@@ -186,8 +180,8 @@ func (c *Client) connect(ctx context.Context) error {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if conn, err := (&net.Dialer{}).DialContext(ctx, "unix", c.socket); err == nil {
-			c.c, c.br = conn, bufio.NewReader(conn)
-			return nil
+			// Another client may have started its own daemon first.
+			return c.accept(conn)
 		}
 		select {
 		case <-ctx.Done():
@@ -196,6 +190,24 @@ func (c *Client) connect(ctx context.Context) error {
 		}
 	}
 	return fmt.Errorf("riffle: daemon did not start on %s", c.socket)
+}
+
+// accept makes conn the client's connection, unless the client insists on a
+// policy and the daemon on the other end runs with another.
+func (c *Client) accept(conn net.Conn) error {
+	if c.want != nil {
+		rec, recorded, err := readRecord(c.socket)
+		if err != nil {
+			_ = conn.Close()
+			return fmt.Errorf("riffle: %w", err)
+		}
+		if !recorded || !same(rec.Policy, *c.want) {
+			_ = conn.Close()
+			return c.mismatch(rec, recorded)
+		}
+	}
+	c.c, c.br = conn, bufio.NewReader(conn)
+	return nil
 }
 
 // Do sends one request and returns the reply body, whether or not the
@@ -211,10 +223,163 @@ func same(p, q Policy) bool { return p.Within(q) && q.Within(p) }
 // mismatch explains why a client that insists on a policy will not use the
 // daemon that is running, and what to do about it.
 func (c *Client) mismatch(rec record, recorded bool) error {
+	next := fmt.Sprintf("run `%s` and run this again, or `%s` to take its place; either ends the sessions open in it", StopCommand(c.socket), serveCommand(c.socket, *c.want))
 	if !recorded {
-		return fmt.Errorf("riffle: the daemon on %s runs with an unknown policy and this client was started with %s; stop that daemon and retry, and this client starts one with its own policy", c.socket, c.want)
+		return fmt.Errorf("riffle: the daemon on %s runs with a policy it did not record, and this command asks for %s; %s", c.socket, c.want, next)
 	}
-	return fmt.Errorf("riffle: the daemon on %s (pid %d) runs with %s, and this client was started with %s; stop that daemon (kill %d) and retry, and this client starts one with its own policy", c.socket, rec.PID, rec.Policy, c.want, rec.PID)
+	return fmt.Errorf("riffle: the daemon on %s (pid %d) runs with %s, and this command asks for %s; %s", c.socket, rec.PID, rec.Policy, c.want, next)
+}
+
+// StopCommand is the command line that stops the daemon on socket.
+func StopCommand(socket string) string {
+	if socket == DefaultSocket() {
+		return "riffle stop"
+	}
+	return "riffle stop -socket " + socket
+}
+
+// serveCommand is the command line that serves socket with policy p, in the
+// place of any daemon running there with another.
+func serveCommand(socket string, p Policy) string {
+	args := []string{"riffle", "serve"}
+	if socket != DefaultSocket() {
+		args = append(args, "-socket", socket)
+	}
+	return strings.Join(append(args, p.Args()...), " ")
+}
+
+// stopWait bounds how long stopping a daemon waits for its sessions to end.
+const stopWait = 30 * time.Second
+
+// Stop ends the daemon on socket and every session in it, and returns once
+// they have ended, with the daemon's word on what it stopped and what a
+// daemon started next would run with. It never starts a daemon: found is
+// false when none is running.
+func Stop(ctx context.Context, socket string) (out string, found bool, err error) {
+	if err := userdir.Ensure(filepath.Dir(socket)); err != nil {
+		return "", false, fmt.Errorf("riffle: socket directory: %w", err)
+	}
+	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", socket)
+	if err != nil {
+		if socket == DefaultSocket() {
+			return "", false, earlierRunning(ctx, socket)
+		}
+		return "", false, nil
+	}
+	out, err = stopOn(ctx, conn, socket, "")
+	if err != nil {
+		return "", true, err
+	}
+	// The record outlasts the daemon, so a restricted one never comes back
+	// unrestricted; it also keeps a widened one wide.
+	if p, err := LastPolicy(socket); err == nil && !same(p, Policy{}) {
+		out += fmt.Sprintf("\na Riffle started with no policy named runs with %s again; name -allow-private=false for the default policy", p)
+	}
+	return out, true, nil
+}
+
+// earlierRunning explains a daemon of an earlier Riffle that runs beside
+// this one's default socket, which this Riffle's stop does not reach.
+func earlierRunning(ctx context.Context, socket string) error {
+	for _, s := range earlierSockets(wire.Protocol) {
+		if conn, err := (&net.Dialer{}).DialContext(ctx, "unix", s); err == nil {
+			_ = conn.Close()
+			stop := "stop its process"
+			if rec, recorded, err := readRecord(s); err == nil && recorded {
+				stop = fmt.Sprintf("stop its process (kill %d)", rec.PID)
+			}
+			return fmt.Errorf("riffle: no daemon of this Riffle is running on %s, but one from an earlier Riffle runs on %s; %s", socket, s, stop)
+		}
+	}
+	return nil
+}
+
+// Replace stops the daemon on socket so that one with policy p can take its
+// place. The stopping daemon records p, with this process as the one to run
+// it, while it still owns the socket: a daemon that starts after it, this
+// one or one a client starts in the gap, runs with p, and the record never
+// names a policy no daemon runs with. found is false when no daemon is
+// running.
+func Replace(ctx context.Context, socket string, p Policy) (out string, found bool, err error) {
+	next, err := json.Marshal(record{PID: os.Getpid(), Policy: p})
+	if err != nil {
+		return "", false, fmt.Errorf("riffle: record policy: %w", err)
+	}
+	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", socket)
+	if err != nil {
+		return "", false, nil
+	}
+	out, err = stopOn(ctx, conn, socket, string(next))
+	return out, true, err
+}
+
+// stopOn asks the daemon on conn to stop, handing it next, the record of the
+// daemon to take its place, if any; then it waits until the daemon has ended
+// its sessions, when it closes the connection.
+func stopOn(ctx context.Context, conn net.Conn, socket, next string) (string, error) {
+	defer func() { _ = conn.Close() }()
+	defer context.AfterFunc(ctx, func() { _ = conn.Close() })()
+	_ = conn.SetDeadline(time.Now().Add(stopWait))
+	br := bufio.NewReader(conn)
+	sendErr := wire.WriteRequest(conn, wire.Request{Verb: wire.Stop, Session: wire.AllSessions, Body: next})
+	var rep wire.Reply
+	var err error
+	if sendErr == nil {
+		rep, err = wire.ReadReply(br)
+	}
+	switch {
+	case ctx.Err() != nil:
+		return "", ctx.Err()
+	case sendErr != nil, dropped(err):
+		// A daemon already ending drops new clients, before or after they
+		// write; it is gone once it has let go of its socket.
+		return gone(ctx, socket)
+	case err != nil:
+		return "", fmt.Errorf("riffle: stop: %w", err)
+	case rep.Failed && strings.HasPrefix(rep.Body, "unknown verb"):
+		return "", unstoppable(socket)
+	case rep.Failed:
+		return "", fmt.Errorf("%s", rep.Body)
+	}
+	if _, err := io.Copy(io.Discard, br); err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", fmt.Errorf("riffle: the daemon on %s agreed to stop and had not ended its sessions after %s: %w", socket, stopWait, err)
+	}
+	return rep.Body, nil
+}
+
+// gone waits until a daemon that was already ending has let go of socket:
+// it takes no connections and no longer owns it.
+func gone(ctx context.Context, socket string) (string, error) {
+	for deadline := time.Now().Add(stopWait); time.Now().Before(deadline); {
+		if conn, err := (&net.Dialer{}).DialContext(ctx, "unix", socket); err == nil {
+			_ = conn.Close()
+		} else if free, err := unowned(socket); err != nil {
+			return "", fmt.Errorf("riffle: %w", err)
+		} else if free {
+			return fmt.Sprintf("the daemon on %s was already stopping, and has stopped", socket), nil
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	return "", fmt.Errorf("riffle: the daemon on %s was stopping and had not ended after %s", socket, stopWait)
+}
+
+// unstoppable explains a daemon from an earlier Riffle, which has no stop.
+func unstoppable(socket string) error {
+	stop := "stop its process"
+	if rec, recorded, err := readRecord(socket); err == nil && recorded {
+		stop = fmt.Sprintf("stop its process (kill %d)", rec.PID)
+	}
+	if socket == DefaultSocket() {
+		return fmt.Errorf("riffle: the daemon on %s is from an earlier Riffle that cannot be stopped this way; %s and retry", socket, stop)
+	}
+	return fmt.Errorf("riffle: the daemon on %s is from an earlier Riffle that cannot be stopped this way; %s and retry, or leave out -socket to use this Riffle's own daemon", socket, stop)
 }
 
 // Hold makes the client hold session for as long as its connection lasts,
@@ -308,4 +473,9 @@ func (c *Client) keepsNoState() error {
 		return fmt.Errorf("riffle: the daemon on %s (pid %d) cannot keep a session's state; stop it (kill %d) and retry, and this client starts one that can", c.socket, rec.PID, rec.PID)
 	}
 	return fmt.Errorf("riffle: the daemon on %s cannot keep a session's state; stop it and retry, and this client starts one that can", c.socket)
+}
+
+// dropped reports a reply the daemon closed the connection before giving.
+func dropped(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET)
 }

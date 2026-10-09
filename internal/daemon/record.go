@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	json "github.com/goccy/go-json"
+	"github.com/noetive/riffle/internal/wire"
 )
 
 // record is the policy a daemon was started with, kept beside its socket. A
@@ -22,10 +23,15 @@ type record struct {
 
 func recordPath(socket string) string { return socket + ".policy" }
 
-// writeRecord replaces the record atomically, so a reader sees the old
-// record or the new one and never a part of either.
+// writeRecord records p as the policy of the daemon this process runs.
 func writeRecord(socket string, p Policy) error {
-	b, err := json.Marshal(record{PID: os.Getpid(), Policy: p})
+	return putRecord(socket, record{PID: os.Getpid(), Policy: p})
+}
+
+// putRecord replaces the record atomically, so a reader sees the old record
+// or the new one and never a part of either.
+func putRecord(socket string, rec record) error {
+	b, err := json.Marshal(rec)
 	if err != nil {
 		return err
 	}
@@ -77,4 +83,15 @@ func readRecord(socket string) (rec record, ok bool, err error) {
 		return record{}, false, fmt.Errorf("the daemon's policy in %s is unreadable; remove it and start riffle serve with the policy you want: %w", recordPath(socket), err)
 	}
 	return rec, true, nil
+}
+
+// LastPolicy is the policy a daemon on socket last ran with: the record, else
+// on the default socket the earlier protocols' record, else the default. A
+// daemon the operator restricted comes back restricted, whoever starts it.
+func LastPolicy(socket string) (Policy, error) {
+	rec, found, err := readRecord(socket)
+	if err == nil && !found && socket == DefaultSocket() {
+		rec, _, err = earlierRecord(earlierSockets(wire.Protocol))
+	}
+	return rec.Policy, err
 }

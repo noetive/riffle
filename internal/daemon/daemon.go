@@ -12,9 +12,12 @@ import (
 	"sync"
 	"time"
 
+	json "github.com/goccy/go-json"
+
 	"github.com/noetive/riffle/internal/audit"
 	"github.com/noetive/riffle/internal/chromium"
 	"github.com/noetive/riffle/internal/engine"
+	"github.com/noetive/riffle/internal/filelock"
 	"github.com/noetive/riffle/internal/program"
 	"github.com/noetive/riffle/internal/quota"
 	"github.com/noetive/riffle/internal/session"
@@ -49,8 +52,11 @@ type Config struct {
 	StateDir string
 	// Policy limits what sessions may reach and upload.
 	Policy Policy
-	Width  int
-	Height int
+	// KeepPolicy runs the daemon with the policy its socket last ran with,
+	// read once the daemon owns the socket, in place of Policy.
+	KeepPolicy bool
+	Width      int
+	Height     int
 	// MaxBrowsers bounds the browsers running at once on this machine,
 	// across every daemon of the user; 0 is DefaultMaxBrowsers.
 	MaxBrowsers int
@@ -97,18 +103,21 @@ type closure struct {
 
 // Daemon serves sessions.
 type Daemon struct {
-	active   time.Time          // guarded by mu: when a client last connected or a request ended
-	sessions map[string]*slot   // guarded by mu
-	holds    map[string]int     // guarded by mu: connections holding each session
-	closed   map[string]closure // guarded by mu: why a session's browser was closed, told on its next use
-	keeps    map[string]int     // guarded by mu: connections holding each session that keep its state
-	keepers  map[string]*keeper // guarded by mu: the keeper of each name whose state is kept
-	log      *audit.Log
-	seats    *quota.Seats
-	launch   func(ctx context.Context, st engine.State) (browsing, error)
-	cfg      Config
-	conns    int  // guarded by mu: open client connections
-	closing  bool // guarded by mu: the daemon has decided to end and takes no more work
+	active   time.Time        // guarded by mu: when a client last connected or a request ended
+	sessions map[string]*slot // guarded by mu
+	// ended is closed once Serve has ended every session, so a client that
+	// asked the daemon to stop hears when it has.
+	ended   chan struct{}
+	holds   map[string]int     // guarded by mu: connections holding each session
+	closed  map[string]closure // guarded by mu: why a session's browser was closed, told on its next use
+	keeps   map[string]int     // guarded by mu: connections holding each session that keep its state
+	keepers map[string]*keeper // guarded by mu: the keeper of each name whose state is kept
+	log     *audit.Log
+	seats   *quota.Seats
+	launch  func(ctx context.Context, st engine.State) (browsing, error)
+	cfg     Config
+	conns   int  // guarded by mu: open client connections
+	closing bool // guarded by mu: the daemon has decided to end and takes no more work
 
 	mu sync.Mutex
 }
@@ -145,7 +154,7 @@ func New(cfg Config) (*Daemon, error) {
 	if err != nil {
 		return nil, fmt.Errorf("daemon: %w", err)
 	}
-	d := &Daemon{cfg: cfg, seats: seats, sessions: map[string]*slot{}, holds: map[string]int{}, closed: map[string]closure{}, keeps: map[string]int{}, keepers: map[string]*keeper{}, active: time.Now()}
+	d := &Daemon{cfg: cfg, seats: seats, sessions: map[string]*slot{}, holds: map[string]int{}, closed: map[string]closure{}, keeps: map[string]int{}, keepers: map[string]*keeper{}, active: time.Now(), ended: make(chan struct{})}
 	d.launch = d.start
 	if cfg.AuditPath != "" {
 		f, err := os.OpenFile(cfg.AuditPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
@@ -162,14 +171,29 @@ func New(cfg Config) (*Daemon, error) {
 func DefaultQuotaDir() string { return filepath.Join(riffleDir(), "browsers") }
 
 // Serve accepts connections until ctx ends, or until the daemon has had no
-// session and no client for DaemonIdle.
+// session and no client for DaemonIdle. It returns a *Serving, having done
+// nothing, when another daemon already serves the socket.
 func (d *Daemon) Serve(ctx context.Context) error {
-	if c, err := (&net.Dialer{}).DialContext(ctx, "unix", d.cfg.Socket); err == nil {
-		_ = c.Close()
-		return fmt.Errorf("daemon: another daemon is already serving %s", d.cfg.Socket)
-	}
 	if err := userdir.Ensure(filepath.Dir(d.cfg.Socket)); err != nil {
 		return fmt.Errorf("daemon: socket directory: %w", err)
+	}
+	owned, err := d.own(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = owned.Close() }()
+	// A daemon of a Riffle from before the lock, on a socket named by hand,
+	// holds none.
+	if c, err := (&net.Dialer{}).DialContext(ctx, "unix", d.cfg.Socket); err == nil {
+		_ = c.Close()
+		return running(d.cfg.Socket)
+	}
+	if d.cfg.KeepPolicy {
+		p, err := LastPolicy(d.cfg.Socket)
+		if err != nil {
+			return fmt.Errorf("daemon: %w", err)
+		}
+		d.cfg.Policy = p
 	}
 	// Recorded before anyone can connect, so a client never meets this daemon
 	// without its policy beside it.
@@ -191,6 +215,7 @@ func (d *Daemon) Serve(ctx context.Context) error {
 		_ = ln.Close()
 	}()
 	go d.tend(ctx, stop)
+	defer close(d.ended)
 	defer d.closeAll(ctx)
 	for {
 		c, err := ln.Accept()
@@ -200,7 +225,7 @@ func (d *Daemon) Serve(ctx context.Context) error {
 			}
 			return fmt.Errorf("daemon: accept: %w", err)
 		}
-		go d.handle(ctx, c)
+		go d.handle(ctx, stop, c)
 	}
 }
 
@@ -289,7 +314,7 @@ func (d *Daemon) closeAll(ctx context.Context) {
 	}
 }
 
-func (d *Daemon) handle(ctx context.Context, c net.Conn) {
+func (d *Daemon) handle(ctx context.Context, end context.CancelFunc, c net.Conn) {
 	d.mu.Lock()
 	if d.closing {
 		// Ending: a client that finds no daemon starts a new one.
@@ -314,6 +339,11 @@ func (d *Daemon) handle(ctx context.Context, c net.Conn) {
 		var rep wire.Reply
 		if err := req.Validate(); err != nil {
 			rep = wire.Reply{Failed: true, Body: err.Error()}
+		} else if req.Verb == wire.Stop {
+			var stopped bool
+			if rep, stopped = d.stop(c, end, req.Body); stopped {
+				return
+			}
 		} else if req.Verb == wire.Hold {
 			rep = d.hold(req.Session, req.Body, held)
 		} else {
@@ -323,6 +353,63 @@ func (d *Daemon) handle(ctx context.Context, c net.Conn) {
 			return
 		}
 	}
+}
+
+// stop ends the daemon for the client that asked: it takes no more work,
+// keeps the record body carries, if any, as the socket's while it still owns
+// the socket, answers, and keeps the connection open until every session
+// has ended, so the client knows the daemon is gone once it closes. A record
+// it cannot keep leaves the daemon running, and says why.
+func (d *Daemon) stop(c net.Conn, end context.CancelFunc, body string) (wire.Reply, bool) {
+	d.mu.Lock()
+	d.closing = true
+	d.mu.Unlock()
+	if body != "" {
+		var next record
+		err := json.Unmarshal([]byte(body), &next)
+		if err == nil {
+			err = putRecord(d.cfg.Socket, next)
+		}
+		if err != nil {
+			d.mu.Lock()
+			d.closing = false
+			d.mu.Unlock()
+			return wire.Reply{Failed: true, Body: fmt.Sprintf("the daemon on %s keeps running: the policy to take its place cannot be recorded: %v", d.cfg.Socket, err)}, false
+		}
+	}
+	_ = wire.WriteReply(c, wire.Reply{Body: fmt.Sprintf("stopped the daemon on %s (pid %d), which ran with %s; the sessions open in it have ended", d.cfg.Socket, os.Getpid(), d.cfg.Policy)})
+	end()
+	<-d.ended
+	return wire.Reply{}, true
+}
+
+// Serving reports a daemon already serving the socket that Serve was asked
+// to serve. Serve leaves that daemon as it is.
+type Serving struct {
+	Socket string
+	Policy Policy
+	PID    int
+	// recorded is false when the daemon left no record of its policy.
+	recorded bool
+}
+
+func (s *Serving) Error() string {
+	if !s.recorded {
+		return fmt.Sprintf("a Riffle daemon is already serving %s with a policy it did not record", s.Socket)
+	}
+	return fmt.Sprintf("a Riffle daemon is already serving %s (pid %d) with %s", s.Socket, s.PID, s.Policy)
+}
+
+// Runs reports whether that daemon runs with exactly policy p.
+func (s *Serving) Runs(p Policy) bool { return s.recorded && same(s.Policy, p) }
+
+// running describes the daemon serving socket.
+func running(socket string) error {
+	rec, recorded, err := readRecord(socket)
+	if err != nil {
+		return fmt.Errorf("daemon: %w", err)
+	}
+	return &Serving{Socket: socket, Policy: rec.Policy, PID: rec.PID, recorded: recorded}
 }
 
 // hold marks the session as held by this connection, and, when the holder
@@ -402,7 +489,7 @@ func (d *Daemon) dispatch(ctx context.Context, req wire.Request) wire.Reply {
 		return d.archive(ctx, req.Session)
 	case wire.Run, wire.View:
 	default:
-		// handle took only verbs of wire.Verbs, and hold before this.
+		// handle took only verbs of wire.Verbs, and hold and stop before this.
 		panic(fmt.Sprintf("daemon: verb %q is in wire.Verbs but nothing serves it", req.Verb))
 	}
 	sl, note, err := d.session(ctx, req.Session)
@@ -683,4 +770,53 @@ func (d *Daemon) archive(ctx context.Context, name string) wire.Reply {
 		return wire.Reply{Failed: true, Body: err.Error()}
 	}
 	return wire.Reply{Body: page}
+}
+
+// own takes the socket for this daemon for as long as the returned file is
+// open, so no two daemons ever listen on one socket. A daemon that owns it
+// and listens is reported as serving; one that owns it while it starts or
+// ends is waited for, up to stopWait.
+func (d *Daemon) own(ctx context.Context) (*os.File, error) {
+	f, err := os.OpenFile(lockPath(d.cfg.Socket), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("daemon: lock socket: %w", err)
+	}
+	for deadline := time.Now().Add(stopWait); ; {
+		owned, err := filelock.TryLock(f)
+		if err != nil {
+			_ = f.Close()
+			return nil, fmt.Errorf("daemon: lock socket: %w", err)
+		}
+		if owned {
+			return f, nil
+		}
+		if c, err := (&net.Dialer{}).DialContext(ctx, "unix", d.cfg.Socket); err == nil {
+			_ = c.Close()
+			_ = f.Close()
+			return nil, running(d.cfg.Socket)
+		}
+		if time.Now().After(deadline) {
+			_ = f.Close()
+			return nil, fmt.Errorf("daemon: another daemon has held %s for %s without serving it", d.cfg.Socket, stopWait)
+		}
+		select {
+		case <-ctx.Done():
+			_ = f.Close()
+			return nil, ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func lockPath(socket string) string { return socket + ".lock" }
+
+// unowned reports whether no daemon owns socket. A daemon from before the
+// lock never owns one.
+func unowned(socket string) (bool, error) {
+	f, err := os.OpenFile(lockPath(socket), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return false, fmt.Errorf("lock socket: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	return filelock.TryLock(f)
 }

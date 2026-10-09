@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -59,10 +60,12 @@ const exitStopped = 3
 
 const usage = `riffle: the browser for agents
 
-  riffle serve [-socket PATH] [POLICY] [LIMITS]
-  riffle run [-s NAME] [-socket PATH]                       program on stdin, reply on stdout
-  riffle view [-s NAME] [-socket PATH] [PROJECTION...]      read the page
+  riffle serve [-socket PATH] [POLICY] [LIMITS]             the daemon, in the foreground
+  riffle run [-s NAME] [-socket PATH] [POLICY]              program on stdin, reply on stdout
+  riffle view [-s NAME] [-socket PATH] [POLICY] [PROJECTION...]
+                                                            read the page
   riffle close [-s NAME] [-socket PATH]                     end a session and its browser
+  riffle stop [-socket PATH]                                end the daemon and every session in it
   riffle archive [-s NAME] [-socket PATH]                   the current page as MHTML on stdout
   riffle mcp [-s NAME | -keep-state NAME] [-socket PATH] [POLICY]
                                                             MCP server on stdio, with a session of its own
@@ -96,7 +99,11 @@ share one browser page.
 With -keep-state NAME the server drives session NAME, and its cookies and
 storage are kept between runs, until the file it names on stderr is deleted.
 
-A daemon started for run, view or mcp keeps the policy it last ran with.
+Without POLICY, a command uses the running daemon whatever its policy, or
+starts one with the policy the last one had. Naming any POLICY flag gives the
+whole policy and turns off those left out; -allow-private=false alone asks
+for the default. With POLICY named, run, view and mcp refuse a daemon running
+with another, and serve stops it, ending its sessions, and takes its place.
 
 riffle run and riffle view exit 3 when a step failed or did not parse, with the
 reply on stdout saying which and why, and 1 when Riffle could not run it at all.`
@@ -111,13 +118,15 @@ func main() {
 	var err error
 	switch os.Args[1] {
 	case "serve":
-		err = serve(ctx, os.Args[2:])
+		err = serve(ctx, os.Stdout, os.Args[2:])
 	case "run":
 		err = client(ctx, wire.Run, os.Args[2:])
 	case "view":
 		err = client(ctx, wire.View, os.Args[2:])
 	case "close":
 		err = closeSession(ctx, os.Args[2:])
+	case "stop":
+		err = stopDaemon(ctx, os.Stdout, os.Args[2:])
 	case "archive":
 		err = archive(ctx, os.Args[2:])
 	case "grammar":
@@ -136,12 +145,25 @@ func main() {
 		os.Exit(exitStopped)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "riffle:", err)
+		// Errors from the daemon's client already say they are Riffle's.
+		fmt.Fprintln(os.Stderr, "riffle:", strings.TrimPrefix(err.Error(), "riffle: "))
 		os.Exit(1)
 	}
 }
 
-func serve(ctx context.Context, args []string) error {
+// limitFlags are serve's flags that only a daemon that starts takes.
+var limitFlags = []string{"audit", "width", "height", "max-browsers", "session-idle", "daemon-idle"}
+
+// replaceAttempts bounds how often serve takes the place of a daemon that
+// is started again with another policy while it does.
+const replaceAttempts = 3
+
+// serve runs the daemon on its socket. Naming a policy declares it: a daemon
+// running there with another is stopped and this one takes its place, unless
+// -start-only, which a client that starts a daemon passes so that it never
+// ends another's sessions. Naming none leaves a running daemon as it is, and
+// starts one with the policy the socket last ran with.
+func serve(ctx context.Context, w io.Writer, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	cfg := daemon.Config{Width: 1280, Height: 800, Product: "Riffle/" + version}
 	fs.StringVar(&cfg.Socket, "socket", daemon.DefaultSocket(), "Unix socket path")
@@ -151,7 +173,8 @@ func serve(ctx context.Context, args []string) error {
 	fs.IntVar(&cfg.MaxBrowsers, "max-browsers", daemon.DefaultMaxBrowsers, "browsers running at once on this machine, across every daemon of this user")
 	fs.DurationVar(&cfg.SessionIdle, "session-idle", daemon.DefaultSessionIdle, "end a session unused this long, unless an MCP server holds it")
 	fs.DurationVar(&cfg.DaemonIdle, "daemon-idle", daemon.DefaultDaemonIdle, "end the daemon after this long with no session and no client")
-	cfg.Policy.Flags(fs)
+	startOnly := fs.Bool("start-only", false, "start a daemon only if none serves the socket; never take another's place")
+	declared := cfg.Policy.Flags(fs)
 	_ = fs.Parse(args)
 	cfg.AuditPath = *audit
 	if cfg.MaxBrowsers < 1 || cfg.SessionIdle <= 0 || cfg.DaemonIdle <= 0 {
@@ -163,17 +186,62 @@ func serve(ctx context.Context, args []string) error {
 	if err := userdir.Ensure(filepath.Dir(cfg.Socket)); err != nil {
 		return fmt.Errorf("socket directory: %w", err)
 	}
+	cfg.KeepPolicy = !declared()
 	d, err := daemon.New(cfg)
 	if err != nil {
 		return err
 	}
-	return d.Serve(ctx)
+	for attempt := 1; ; attempt++ {
+		err := d.Serve(ctx)
+		var running *daemon.Serving
+		if !errors.As(err, &running) {
+			return err
+		}
+		if *startOnly {
+			return nil
+		}
+		if !declared() || running.Runs(cfg.Policy) {
+			return leaveRunning(w, fs, running, declared())
+		}
+		if attempt == replaceAttempts {
+			return fmt.Errorf("serve: the daemon on %s was started again with %s while this one was taking its place; an MCP entry or another riffle command asks for that policy", cfg.Socket, running.Policy)
+		}
+		out, found, err := daemon.Replace(ctx, cfg.Socket, cfg.Policy)
+		if err != nil {
+			return err
+		}
+		if found {
+			fmt.Fprintln(os.Stderr, "riffle serve:", out)
+		}
+	}
+}
+
+// leaveRunning reports a daemon serve leaves as it is. Limits it was given
+// would not reach that daemon, so naming one is an error rather than ignored.
+func leaveRunning(w io.Writer, fs *flag.FlagSet, running *daemon.Serving, declared bool) error {
+	var limits []string
+	fs.Visit(func(f *flag.Flag) {
+		if slices.Contains(limitFlags, f.Name) {
+			limits = append(limits, "-"+f.Name)
+		}
+	})
+	if len(limits) > 0 {
+		return fmt.Errorf("serve: %w; %s take effect only when a daemon starts: stop it with `%s` and run this again", running, strings.Join(limits, ", "), daemon.StopCommand(running.Socket))
+	}
+	if declared {
+		_, err := fmt.Fprintln(w, running)
+		return err
+	}
+	_, err := fmt.Fprintf(w, "%v; riffle serve with a POLICY named takes its place, ending its sessions, and `%s` stops it\n", running, daemon.StopCommand(running.Socket))
+	return err
 }
 
 func client(ctx context.Context, verb string, args []string) error {
 	fs := flag.NewFlagSet(verb, flag.ExitOnError)
 	sock := fs.String("socket", daemon.DefaultSocket(), "Unix socket path")
 	name := fs.String("s", "default", "session name")
+	var policy daemon.Policy
+	declared := policy.Flags(fs)
 	_ = fs.Parse(args)
 	body := strings.Join(fs.Args(), " ")
 	if verb == wire.Run {
@@ -183,13 +251,24 @@ func client(ctx context.Context, verb string, args []string) error {
 		}
 		body = string(b)
 	}
-	c := daemon.NewClient(*sock)
+	c := newClient(*sock, policy, declared())
 	defer c.Close()
 	rep, err := c.Exchange(ctx, wire.Request{Verb: verb, Session: *name, Body: body})
 	if err != nil {
 		return err
 	}
 	return emit(os.Stdout, rep)
+}
+
+// newClient is a client for sock. A command line that names a policy is the
+// operator declaring it, so the client insists on it; one that names none
+// takes the daemon's.
+func newClient(sock string, policy daemon.Policy, declared bool) *daemon.Client {
+	c := daemon.NewClient(sock)
+	if declared {
+		c.Expect(policy)
+	}
+	return c
 }
 
 // emit prints a reply, and reports a program that stopped at a failed step.
@@ -209,23 +288,14 @@ func mcpMain(ctx context.Context, args []string) error {
 	name := fs.String("s", "", "session name (default: one of its own, shared with no other server)")
 	keep := fs.String("keep-state", "", "drive session `NAME` and keep its cookies and storage between runs")
 	var policy daemon.Policy
-	policy.Flags(fs)
+	declared := policy.Flags(fs)
 	_ = fs.Parse(args)
 	session, err := mcpSession(*name, *keep)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "riffle mcp: session %s\n", session)
-	c := daemon.NewClient(*sock)
-	// An editor entry that names a policy is the operator declaring it; one
-	// that names none uses whatever the daemon was given.
-	declared := false
-	fs.Visit(func(f *flag.Flag) {
-		declared = declared || f.Name != "socket" && f.Name != "s" && f.Name != "keep-state"
-	})
-	if declared {
-		c.Expect(policy)
-	}
+	c := newClient(*sock, policy, declared())
 	defer c.Close()
 	// The server holds its session: it ends when the server does.
 	c.Hold(session)
@@ -281,6 +351,23 @@ func closeSession(ctx context.Context, args []string) error {
 	}
 	fmt.Println(out)
 	return nil
+}
+
+// stopDaemon ends the daemon and every session in it. Like close, it never
+// starts a daemon: with none running there is nothing to stop.
+func stopDaemon(ctx context.Context, w io.Writer, args []string) error {
+	fs := flag.NewFlagSet("stop", flag.ExitOnError)
+	sock := fs.String("socket", daemon.DefaultSocket(), "Unix socket path")
+	_ = fs.Parse(args)
+	out, found, err := daemon.Stop(ctx, *sock)
+	if err != nil {
+		return err
+	}
+	if !found {
+		out = fmt.Sprintf("no Riffle daemon is running on %s; nothing to stop", *sock)
+	}
+	_, err = fmt.Fprintln(w, out)
+	return err
 }
 
 // archive writes the session's current page as one MHTML document. Like

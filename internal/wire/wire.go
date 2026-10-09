@@ -2,7 +2,7 @@
 // and the daemon. A frame is one header line and a body of exactly the
 // stated byte length. There is no JSON on this path.
 //
-//	request: "<verb> <session> <bytes>\n<body>"   verb is run, view, close, archive or hold
+//	request: "<verb> <session> <bytes>\n<body>"   verb is run, view, close, archive, hold or stop
 //	reply:   "<ok|err> <bytes>\n<body>"
 package wire
 
@@ -27,7 +27,15 @@ const (
 	// stays open: an MCP server holds its session, and when its last holder
 	// goes the session ends.
 	Hold = "hold"
+	// Stop ends the daemon and every session in it. It names no session:
+	// its session is AllSessions. It carries nothing, or the record of the
+	// daemon that is to take its place, which the stopping daemon keeps as
+	// the socket's while it still owns the socket.
+	Stop = "stop"
 )
+
+// AllSessions is the session of a request that is about the whole daemon.
+const AllSessions = "*"
 
 // Protocol names this vocabulary. A client only ever reaches a daemon that
 // speaks its protocol: the default socket is named after it, so the daemon a
@@ -35,14 +43,14 @@ const (
 // way. Bump it whenever a verb, a hold body, a reply status, the frame or the
 // meaning of a reply changes; a build that changes none of them keeps it.
 //
-// The first bump is the first to run beside an earlier daemon. Two things
-// then become reachable that protocol 2 never meets: a shell's riffle view,
-// close or archive finds no session that runs on the earlier daemon, and
-// forgetting kept sign-ins means deleting the earlier protocol's copy too.
-const Protocol = 2
+// Protocol 3 added stop, and was the first to run beside an earlier daemon.
+// Since then a shell's riffle view, close or archive finds no session that
+// runs on an earlier daemon, and forgetting kept sign-ins means deleting the
+// earlier protocols' copies too.
+const Protocol = 3
 
 // Verbs are every verb a daemon of this Protocol understands.
-var Verbs = []string{Run, View, Close, Archive, Hold}
+var Verbs = []string{Run, View, Close, Archive, Hold, Stop}
 
 // KeepState is the body of a hold that asks for the session's cookies and
 // storage to be kept between its browsers. A daemon that keeps them replies
@@ -149,6 +157,9 @@ func (r Request) Validate() error {
 	}
 	if strings.ContainsAny(r.Session, " \n") || r.Session == "" || len(r.Session) > MaxSession {
 		return fmt.Errorf("wire: bad session name %q: one word of at most %d bytes", r.Session, MaxSession)
+	}
+	if r.Verb == Stop && r.Session != AllSessions {
+		return fmt.Errorf("wire: stop is about the whole daemon: its session is %q", AllSessions)
 	}
 	return nil
 }

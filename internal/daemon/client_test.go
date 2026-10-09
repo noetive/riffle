@@ -313,7 +313,11 @@ func TestClientRefusesASocketInADirectoryOthersCanWrite(t *testing.T) {
 	}
 }
 
-func TestADaemonStartedAgainGetsThePolicyItLastRanWith(t *testing.T) {
+// A client that names no policy starts a daemon that names none either: the
+// daemon reads the policy the socket last ran with as it starts, so the
+// operator's restrictions survive a restart and a record this client read a
+// moment ago is never replayed over a newer one.
+func TestAClientThatNamesNoPolicyStartsADaemonThatReadsTheLastOne(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "riffle.sock")
 	hardened := Policy{Origins: []string{"https://shop.example"}, AllowEval: true}
 	if err := writeRecord(sock, hardened); err != nil {
@@ -332,8 +336,11 @@ func TestADaemonStartedAgainGetsThePolicyItLastRanWith(t *testing.T) {
 		args = string(b)
 		time.Sleep(20 * time.Millisecond)
 	}
-	if want := "serve -socket " + sock + " -allow-eval -allow-origin https://shop.example"; args != want {
-		t.Errorf("a crashed daemon came back as %q, want %q: the operator's restrictions must survive a restart", args, want)
+	if want := "serve -socket " + sock + " -start-only"; args != want {
+		t.Errorf("started as %q, want %q", args, want)
+	}
+	if p, err := LastPolicy(sock); err != nil || !same(p, hardened) {
+		t.Errorf("the daemon it starts runs with %v (%v), want %v: the operator's restrictions must survive a restart", p, err, hardened)
 	}
 }
 
@@ -355,8 +362,8 @@ func TestAClientThatInsistsOnAPolicyStartsTheDaemonWithIt(t *testing.T) {
 		args = string(b)
 		time.Sleep(20 * time.Millisecond)
 	}
-	if want := "serve -socket " + sock; args != want {
-		t.Errorf("started as %q, want %q", args, want)
+	if want := "serve -socket " + sock + " -start-only -allow-private=false"; args != want {
+		t.Errorf("started as %q, want %q: the default policy is declared, not left to the record", args, want)
 	}
 }
 
@@ -368,8 +375,8 @@ func TestAClientThatInsistsOnAPolicyRefusesADaemonWithAnother(t *testing.T) {
 	c := NewClient(s.sock).Expect(Policy{AllowPrivate: true})
 	defer c.Close()
 	_, err := c.Exchange(t.Context(), wire.Request{Verb: wire.View, Session: "a"})
-	if err == nil || !strings.Contains(err.Error(), "-allow-private -allow-eval") || !strings.Contains(err.Error(), "kill "+strconv.Itoa(os.Getpid())) {
-		t.Fatalf("err = %v: the refusal names the daemon's policy and how to stop it", err)
+	if err == nil || !strings.Contains(err.Error(), "-allow-private -allow-eval") || !strings.Contains(err.Error(), "`riffle stop -socket "+s.sock+"`") || !strings.Contains(err.Error(), "`riffle serve -socket "+s.sock+" -allow-private`") {
+		t.Fatalf("err = %v: the refusal names the daemon's policy, how to stop it and how to replace it", err)
 	}
 
 	same := NewClient(s.sock).Expect(Policy{AllowEval: true, AllowPrivate: true})
@@ -525,28 +532,31 @@ func TestAnUnreadableEarlierRecordFailsClosed(t *testing.T) {
 	}
 }
 
-// A daemon of protocol 2 starts again with the policy riffle.sock last ran
-// with, as released Riffles did: the earlier records do not get in its way.
-func TestADefaultDaemonStartedAgainGetsThePolicyItLastRanWith(t *testing.T) {
+// The default socket's own record wins over the earlier protocols'; with
+// none, the earlier ones speak for it; a socket named by hand has only its
+// own.
+func TestLastPolicyIsTheSocketsRecordThenTheEarlierOnesThenTheDefault(t *testing.T) {
 	privateCache(t)
+	if err := writeRecord(socketFor(2), Policy{Origins: []string{"https://shop.example"}}); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := LastPolicy(DefaultSocket()); err != nil || len(p.Origins) != 1 {
+		t.Errorf("with no record of its own, the default socket keeps the earlier restrictions: %v %v", p, err)
+	}
 	if err := writeRecord(DefaultSocket(), Policy{AllowEval: true}); err != nil {
 		t.Fatal(err)
 	}
-	argsFile := filepath.Join(t.TempDir(), "args")
-	t.Setenv("RIFFLE_TEST_SPAWN_ARGS", argsFile)
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer cancel()
-	c := NewClient(DefaultSocket())
-	defer c.Close()
-	go func() { _, _ = c.Exchange(ctx, wire.Request{Verb: wire.View, Session: "a"}) }()
-	var args string
-	for ctx.Err() == nil && args == "" {
-		b, _ := os.ReadFile(argsFile)
-		args = string(b)
-		time.Sleep(20 * time.Millisecond)
+	if p, err := LastPolicy(DefaultSocket()); err != nil || !same(p, Policy{AllowEval: true}) {
+		t.Errorf("the socket's own record wins: %v %v", p, err)
 	}
-	if want := "serve -socket " + DefaultSocket() + " -allow-eval"; args != want {
-		t.Errorf("started %q, want %q", args, want)
+	if p, err := LastPolicy(filepath.Join(t.TempDir(), "s")); err != nil || !same(p, Policy{}) {
+		t.Errorf("a socket named by hand with no record runs with the default policy: %v %v", p, err)
+	}
+	if err := os.WriteFile(DefaultSocket()+".policy", []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LastPolicy(DefaultSocket()); err == nil || !strings.Contains(err.Error(), "unreadable") {
+		t.Errorf("a record that cannot be read is an error, never the default policy: %v", err)
 	}
 }
 

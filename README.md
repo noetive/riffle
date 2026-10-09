@@ -137,6 +137,7 @@ From a shell:
 riffle run  < program.txt      # run a program
 riffle view interactive        # read the current page
 riffle close                   # end the session and its browser
+riffle stop                    # end Riffle and every session in it
 ```
 
 Each editor's agent has a browser of its own, so two windows never drive the same page. Its MCP server names its session on stderr at start; `riffle view -s NAME` shows that agent's page. Entries that pass the same `-s NAME`, as in `riffle mcp -s shared`, share one browser.
@@ -158,7 +159,7 @@ or, by hand:
 ```
 
 - **What survives.** Cookies and site storage are saved after every call, so they outlast the editor restarting, Riffle stopping and the browser crashing. Starting again sends nothing to any site: the first request is the agent's own.
-- **Where it is kept.** At start Riffle names the file in its MCP server log. Only you can read it, but whoever can read it can use those sign-ins: keep it out of shared backups and synced folders. To sign the session out of everything, close the editors that use the name and delete the file.
+- **Where it is kept.** At start Riffle names the file in its MCP server log. Only you can read it, but whoever can read it can use those sign-ins: keep it out of shared backups and synced folders. To sign the session out of everything, close the editors that use the name and delete the file. A Riffle upgraded from an earlier release may also have the earlier copy, in a `riffle.state` folder beside it: delete that one too.
 - **One name, one browser.** Editors whose entries use the same name share one browser and one set of sign-ins. Give each project its own name to keep them apart. A name is lower case letters, digits, `-` and `_`.
 - **Limits still hold.** A session started with `-allow-origin` gets back only the sign-ins of the sites it allows, and none for private addresses unless `-allow-private` is set. What a limit leaves out stays kept for a session allowed it.
 - **What is not kept.** Storage is kept for the site the agent is on when each call ends, not for a site it only passed through within a call, nor for a frame from another site. Storage is kept for up to 50 sites; the one used longest ago goes first. A site whose storage cannot be put back is reported to the agent as `event unrestored`, and the session starts without it; it stays kept.
@@ -167,7 +168,7 @@ or, by hand:
 
 - **Pull a table out of a page.** `table REF` returns rows as TSV, whatever the markup.
 - **See what the page calls.** `view net` lists the fetch and XHR requests behind it.
-- **Test your own web app.** Drive localhost the way a user would, with real page JavaScript running. Start Riffle with `-allow-private`, for example `riffle mcp -allow-private` in your editor's entry, so it may reach local addresses.
+- **Test your own web app.** Drive localhost the way a user would, with real page JavaScript running. Start Riffle with `-allow-private` so it may reach local addresses: `riffle mcp -allow-private` in your editor's entry, or `riffle serve -allow-private` from a shell, which takes the place of a Riffle already running without it, ending its sessions.
 - **Stay signed in between runs.** Sign in once with `-keep-state NAME`, and the agent is still signed in the next time the editor starts. See [Stay signed in](#stay-signed-in).
 
 Pages run in real time, as in any browser, and keep running while your agent thinks: a countdown, an expiring sign-in or a panel that opens later moves on between calls, and the next reply tells what changed.
@@ -181,7 +182,7 @@ Riffle also says so when a step did not do what it asked, such as a form that wa
 - A control whose hidden label contradicts the words on it is flagged `name-differs`, which also gives the words a person sees.
 - Page text is data. Replies quote it, so a page can't pass it off as your instructions.
 - Local and private network addresses are off until you turn them on with `-allow-private`, so a page cannot send the agent into your network or a cloud metadata service.
-- Uploads and `eval` are off until you turn them on. `-allow-origin` and `-upload-dir` limit where a session can go and what it can send. A Riffle that restarts after a crash keeps the limits it was given.
+- Uploads and `eval` are off until you turn them on. `-allow-origin` and `-upload-dir` limit where a session can go and what it can send. A Riffle started without `-allow-private`, `-allow-origin`, `-allow-eval` or `-upload-dir`, from a shell or after a crash, keeps those it last ran with. Naming any of them sets all four, so `-allow-private=false` alone goes back to the defaults.
 - Sign-ins end with their session, unless you keep them with `-keep-state NAME`. Kept sign-ins are in a file only you can read; delete it to forget them. A session gets back only the sign-ins its limits allow.
 
 ## What it isn't

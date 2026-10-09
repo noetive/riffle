@@ -22,6 +22,7 @@ import (
 
 	json "github.com/goccy/go-json"
 
+	"github.com/noetive/riffle/internal/filelock"
 	"github.com/noetive/riffle/internal/userdir"
 )
 
@@ -133,7 +134,7 @@ func (q *Seats) try(n int) (*os.File, bool, error) {
 	if err != nil {
 		return nil, false, fmt.Errorf("quota: %w", err)
 	}
-	held, err := tryLock(f)
+	held, err := filelock.TryLock(f)
 	if err != nil {
 		_ = f.Close()
 		return nil, false, fmt.Errorf("quota: lock seat %d: %w", n, err)

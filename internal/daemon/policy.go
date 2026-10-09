@@ -27,15 +27,26 @@ type Policy struct {
 	AllowEval bool
 }
 
-// Flags registers the policy's command-line flags on fs.
-func (p *Policy) Flags(fs *flag.FlagSet) {
+// policyFlags are the names Flags registers.
+var policyFlags = []string{"allow-private", "allow-eval", "allow-origin", "upload-dir"}
+
+// Flags registers the policy's command-line flags on fs. Once fs is parsed,
+// declared reports whether the command line named any of them: naming one
+// declares the whole policy, and those it leaves out are off.
+func (p *Policy) Flags(fs *flag.FlagSet) (declared func() bool) {
 	fs.BoolVar(&p.AllowPrivate, "allow-private", false, "allow loopback, link-local and private network addresses, such as an app on localhost")
 	fs.BoolVar(&p.AllowEval, "allow-eval", false, "allow the eval statement")
 	fs.Var((*originList)(&p.Origins), "allow-origin", "restrict documents to this origin, scheme://host[:port]; repeatable")
 	fs.StringVar(&p.UploadDir, "upload-dir", "", "the only directory files may be uploaded from")
+	return func() bool {
+		named := false
+		fs.Visit(func(f *flag.Flag) { named = named || slices.Contains(policyFlags, f.Name) })
+		return named
+	}
 }
 
-// Args is the policy as the flags Flags reads.
+// Args is the policy as the flags Flags reads. They always declare it: the
+// default policy is -allow-private=false.
 func (p Policy) Args() []string {
 	var args []string
 	if p.AllowPrivate {
@@ -50,14 +61,17 @@ func (p Policy) Args() []string {
 	if p.UploadDir != "" {
 		args = append(args, "-upload-dir", p.UploadDir)
 	}
+	if len(args) == 0 {
+		args = []string{"-allow-private=false"}
+	}
 	return args
 }
 
 func (p Policy) String() string {
-	if a := p.Args(); len(a) > 0 {
-		return strings.Join(a, " ")
+	if same(p, Policy{}) {
+		return "the default policy"
 	}
-	return "the default policy"
+	return strings.Join(p.Args(), " ")
 }
 
 // Within reports whether p allows nothing that q forbids.
@@ -143,7 +157,7 @@ func (p Policy) request(rawURL, resourceType string) error {
 		return fmt.Errorf("refused: %s: URLs are not allowed; use http or https", u.Scheme)
 	}
 	if !p.AllowPrivate && private(u.Hostname()) {
-		return fmt.Errorf("refused: %s is a private address; the operator allows private addresses with -allow-private", u.Hostname())
+		return fmt.Errorf("refused: %s is %s", u.Hostname(), privateRefusal)
 	}
 	if resourceType == "Document" && len(p.Origins) > 0 {
 		origin := strings.ToLower(u.Scheme + "://" + u.Host)
@@ -156,6 +170,10 @@ func (p Policy) request(rawURL, resourceType string) error {
 	}
 	return nil
 }
+
+// privateRefusal is why a private address is refused, said to the operator: the
+// flag, and the two places a Riffle that starts a daemon is started from.
+const privateRefusal = "a private address; the operator allows private addresses by starting Riffle with -allow-private, as `riffle mcp -allow-private` in the editor's MCP entry or `riffle serve -allow-private` in a shell"
 
 func private(host string) bool {
 	host = strings.TrimSuffix(strings.ToLower(host), ".")
@@ -262,7 +280,7 @@ func (p Policy) Upload(path string) error {
 // DNS, so it sees the address a name resolved to.
 func (p Policy) Dial(ip net.IP) error {
 	if !p.AllowPrivate && PrivateIP(ip) {
-		return fmt.Errorf("%s is a private address; the operator allows private addresses with -allow-private", ip)
+		return fmt.Errorf("%s is %s", ip, privateRefusal)
 	}
 	return nil
 }

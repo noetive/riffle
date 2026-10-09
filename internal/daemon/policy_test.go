@@ -313,3 +313,62 @@ func TestPolicyFlagsRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// A refusal reaches whoever drives Riffle, from a shell or an editor; it
+// names the flag and both places it goes.
+func TestAPrivateAddressRefusalSaysWhereTheFlagGoes(t *testing.T) {
+	var p daemon.Policy
+	for _, err := range []error{p.Navigate("http://localhost:3000/"), p.Dial(net.ParseIP("127.0.0.1"))} {
+		if err == nil {
+			t.Fatal("a private address is refused by default")
+		}
+		for _, want := range []string{"private address", "`riffle serve -allow-private`", "`riffle mcp -allow-private`"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%q does not say %q", err, want)
+			}
+		}
+	}
+}
+
+// Every policy a client starts a daemon with is a declaration, the default
+// one included, so the daemon never reads the record in its place.
+func TestEveryPolicyAsFlagsDeclaresAPolicy(t *testing.T) {
+	for _, args := range [][]string{
+		(daemon.Policy{}).Args(),
+		(daemon.Policy{AllowEval: true}).Args(),
+		(daemon.Policy{Origins: []string{"https://a.example"}}).Args(),
+		(daemon.Policy{UploadDir: "/up"}).Args(),
+		{"-allow-private=false"},
+		{"-socket", "/s", "-allow-private"},
+		{},
+		{"-socket", "/s", "-s", "a"},
+	} {
+		fs := flag.NewFlagSet("t", flag.ContinueOnError)
+		fs.String("socket", "", "")
+		fs.String("s", "", "")
+		var got daemon.Policy
+		declared := got.Flags(fs)
+		if err := fs.Parse(args); err != nil {
+			t.Fatal(err)
+		}
+		named := false
+		for _, a := range args {
+			named = named || (a != "-socket" && a != "-s" && strings.HasPrefix(a, "-"))
+		}
+		if declared() != named {
+			t.Errorf("%q declared = %v, want %v", args, declared(), named)
+		}
+	}
+	if s := (daemon.Policy{}).String(); s != "the default policy" {
+		t.Errorf("the default policy is said as such, not as its flags: %q", s)
+	}
+}
+
+func TestAnOperatorWhoAllowsPrivateAddressesLetsTheBrowserDialThem(t *testing.T) {
+	if err := (daemon.Policy{AllowPrivate: true}).Dial(net.ParseIP("127.0.0.1")); err != nil {
+		t.Errorf("allowed private address refused: %v", err)
+	}
+	if err := (daemon.Policy{}).Dial(net.ParseIP("93.184.216.34")); err != nil {
+		t.Errorf("public address refused: %v", err)
+	}
+}
