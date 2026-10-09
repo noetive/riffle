@@ -27,11 +27,16 @@ jobs:
   # yet. npm publishes with the NPM_TOKEN secret, and a granular write token
   # expires within 90 days, so this is the failure to expect.
   #
+  # NPM_TOKEN is a secret of the `release` environment, which only runs for v*
+  # tags: a workflow pushed on a branch cannot read it. Only this job and npm
+  # name the environment.
+  #
   # whoami proves the token is live, not that it may publish: npm offers no way
   # to ask whether it can write to the @noetive scope or bypasses two-factor
   # authentication. Either gap fails at publish, after the GitHub Release
   # exists; replace the secret and re-run the failed jobs.
   preflight:
+    environment: release
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -47,11 +52,11 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "::error title=NPM_TOKEN is not set::Add an npm granular access token with read and write on the @noetive scope and two-factor bypass enabled as the NPM_TOKEN repository secret."
+            echo "::error title=NPM_TOKEN is not set::Add an npm granular access token with read and write on the @noetive scope and two-factor bypass enabled as the NPM_TOKEN secret of the release environment (Settings, Environments)."
             exit 1
           fi
           npm whoami || {
-            echo "::error title=NPM_TOKEN is not valid::npm rejected the token. It is set but expired or revoked; replace the NPM_TOKEN repository secret."
+            echo "::error title=NPM_TOKEN is not valid::npm rejected the token. It is set but expired or revoked; replace the NPM_TOKEN secret of the release environment."
             exit 1
           }
 
@@ -149,6 +154,7 @@ jobs:
 
   npm:
     needs: release
+    environment: release
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
