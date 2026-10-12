@@ -5,8 +5,8 @@ go 1.27.2
 require (
 	github.com/goccy/go-json v0.11.2
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/tidwall/gjson v1.19.0
-	golang.org/x/sys v0.41.0
+	github.com/tidwall/gjson v1.20.0
+	golang.org/x/sys v0.49.0
 )
 
 require (
