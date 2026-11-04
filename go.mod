@@ -3,10 +3,10 @@ module github.com/noetive/riffle
 go 1.27.3
 
 require (
-	github.com/goccy/go-json v0.11.2
+	github.com/goccy/go-json v0.12.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/tidwall/gjson v1.19.0
-	golang.org/x/sys v0.41.0
+	github.com/tidwall/gjson v1.20.0
+	golang.org/x/sys v0.49.0
 )
 
 require (
