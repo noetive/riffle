@@ -96,9 +96,13 @@ jobs:
     strategy:
       fail-fast: false
       # The installer resolves per-platform binaries and per-user paths, so
-      # path handling is only covered by running on each.
+      # path handling is only covered by running on each. macOS is left out:
+      # hosted macOS runners are often not assigned at all, which fails the run
+      # without testing anything. The pre-commit hook runs these tests on macOS
+      # whenever installer/ changes, and the release smoke test still installs
+      # the published package on macOS.
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
