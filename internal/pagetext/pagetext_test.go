@@ -60,9 +60,11 @@ func TestFlattenKeepsLayoutButNotLineBreaks(t *testing.T) {
 	}
 }
 
+// drawsNothing is the fuzz oracle's own list of characters Clean drops,
+// including private-use characters, which icon fonts draw as pictures.
 func drawsNothing(r rune) bool {
 	return !unicode.Is(unicode.Prepended_Concatenation_Mark, r) &&
-		unicode.In(r, unicode.Cc, unicode.Cf, unicode.Variation_Selector, unicode.Other_Default_Ignorable_Code_Point)
+		unicode.In(r, unicode.Cc, unicode.Cf, unicode.Variation_Selector, unicode.Other_Default_Ignorable_Code_Point, unicode.Co)
 }
 
 // joiner reports a joiner Clean keeps: between two letters, marks or symbols.
