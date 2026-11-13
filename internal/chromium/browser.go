@@ -173,7 +173,12 @@ func launchArgs(profile string, extra ...string) []string {
 		"--password-store=basic",
 		// A page restored from the back-forward cache fires no load event,
 		// so going back would wait for one that never comes.
-		"--disable-features=BackForwardCache",
+		// HTTPS-First mode, on by default from Chrome 157, answers an http
+		// site whose upgrade to https fails with a warning page nobody is
+		// there to click through; without it the browser still tries https
+		// first and falls back to the http address asked for. The browser
+		// takes one --disable-features, so every feature goes in this flag.
+		"--disable-features=BackForwardCache,HttpsFirstBalancedModeAutoEnable",
 		"--no-first-run",
 		"--no-default-browser-check",
 		"--disable-background-networking",
