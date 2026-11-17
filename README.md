@@ -1,10 +1,15 @@
 <div align="center">
 
-# Riffle
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/logo/riffle-on-dark.png">
+    <img alt="Riffle" src=".github/logo/riffle-on-light.png" width="440">
+  </picture>
+</h1>
 
 ### Your agent uses the web as text, not screenshots.
 
-**Pages as text. Only what changed comes back. Several steps per call. Fully interactive, without a mouse or keyboard.**
+**Riffle sends each page as text, then only what changed.<br>Your agent runs several steps per call, with no screenshots and no mouse.**
 
 [![npm](https://img.shields.io/npm/v/@noetive/riffle?style=flat-square&color=cb3837&label=npm)](https://www.npmjs.com/package/@noetive/riffle)
 [![CI](https://img.shields.io/github/actions/workflow/status/noetive/riffle/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/noetive/riffle/actions/workflows/ci.yml)
@@ -12,7 +17,7 @@
 [![MCP server](https://img.shields.io/badge/MCP-server-5c4ee5?style=flat-square)](#install)
 [![License: ISC](https://img.shields.io/badge/license-ISC-f4c430?style=flat-square)](LICENSE)
 
-**[Why Riffle](#why-riffle) · [Install](#install) · [Use](#use) · [Stay signed in](#stay-signed-in) · [Safe by default](#safe-by-default) · [Releases](https://github.com/noetive/riffle/releases)**
+**[In numbers](#in-numbers) · [Why Riffle](#why-riffle) · [Install](#install) · [Use](#use) · [Safe by default](#safe-by-default) · [Questions](#questions) · [Releases](https://github.com/noetive/riffle/releases)**
 
 <code>npx @noetive/riffle init</code>
 
@@ -24,7 +29,22 @@
 
 Riffle is an MCP server and CLI. It runs Chrome with the page's JavaScript and hands your agent each page as text it can read and act on.
 
+## In numbers
+
+How much your agent reads back, compared with a tool that hands it the whole page after every action. Both columns are Riffle's own text, so the difference is only what Riffle leaves out.
+
+| Task | Whole page every time | With Riffle |
+| --- | --- | --- |
+| Close a cookie dialog over a small cart, then see the page | 1,158 characters | **208** (only what changed) |
+| Read a guide with 40 sections | 23,861 characters | **5,918** (default budget) |
+| The same guide at `budget=800` | 23,861 characters | **3,168** |
+| Sign in: dismiss cookies, fill two fields, submit, check the URL, read the result | 7 tool calls | **1 call** |
+
+Measured with Riffle 0.2.0 on generated pages served from localhost, so your pages will differ. Figures count characters, not tokens. What a budget leaves out is folded into lines your agent can expand, not dropped. The sign-in took about 5 seconds, including starting the browser. Check it on your own page: `riffle view outline` against `riffle view outline budget=100000`.
+
 ## Why Riffle
+
+Most browser tools fill your agent's context with screenshots or whole-page snapshots and spend a turn on every click. Riffle changes four things.
 
 ### Your agent sees what a person sees
 
@@ -56,7 +76,7 @@ After the first view, every reply carries only what changed. Click "Reject" on t
 ~ main -covered-by=d1
 ```
 
-Every view also takes a token budget, so a long page costs what you set: `view interactive budget=800`.
+Every view also takes a token budget, 1,500 by default, so a long page costs what you set: `view interactive budget=800`. What does not fit is folded into lines such as `… 115 more lines r10`, and `view expand r10` opens one.
 
 ### Fewer turns, less waiting
 
@@ -76,7 +96,7 @@ After each step Riffle waits until the page has answered and gone quiet instead 
 
 ### No mouse, no keyboard, no screenshots
 
-Your agent names what to act on by the words on it or by a ref from a view: `click "Reject"`, `fill "Email" "ralph@example.com"`, `click b4`. Your agent never steers a pointer, aims at coordinates or reads an image. `fill` sets a whole field in one step, and `press Enter` names the key. When a step can't happen, the reply says what is in the way:
+Your agent names what to act on by the words on it or by a ref from a view: `click "Reject"`, `fill "Email" "ralph@example.com"`, `click b4`. `fill` sets a whole field in one step, and `press Enter` names the key. When a step can't happen, the reply says what is in the way:
 
 ```
 failed line 1: click "Checkout": blocked: b4 covered-by d1 "Cookie preferences"
@@ -91,6 +111,20 @@ Your agent's next program closes the dialog first.
 | Screenshots and clicks at coordinates | An image and a turn for every action, and guesses from pixels | Text, and several steps per call |
 | A page snapshot or raw HTML after every action | The whole page again in your agent's context, every time | Only what changed |
 | Fetching a page as Markdown | It can read, but it can't click, fill in or sign in | A real browser: click, fill in, sign in |
+| A browser test framework your agent scripts | Selectors and waits to write and keep working, a turn for every step | Steps named by on-page words, waits handled, several per call |
+
+## What you can do with it
+
+- **Test your own web app.** Drive localhost the way a user would, with real page JavaScript running. Local addresses are off by default; put `riffle mcp -allow-private` in your editor's entry to allow them.
+- **Work behind a sign-in.** Sign in once with `-keep-state NAME`, and the agent is still signed in the next time the editor starts. See [Stay signed in](#stay-signed-in).
+- **Pull a table out of a page.** `view table REF` returns rows as TSV, whatever the markup.
+- **See what the page calls.** `view net` lists the fetch and XHR requests behind it.
+
+Pages run in real time, as in any browser, and keep running while your agent thinks: a countdown, an expiring sign-in or a panel that opens later moves on between calls, and the next reply tells what changed.
+
+When a step runs but the page does not do what it asked, such as a form that refuses its input, the reply says so, and your agent can fix it and go on.
+
+Try it: `npx @noetive/riffle init`, then see [First run](#first-run).
 
 ## Install
 
@@ -121,6 +155,12 @@ riffle doctor
 ```
 
 Riffle runs its own throwaway Chrome. It never touches your saved passwords or keychain, and it cleans up after itself when it stops.
+
+### First run
+
+1. Run `npx @noetive/riffle init`.
+2. Restart your editor so it loads Riffle.
+3. Ask your agent: *"Open example.com with Riffle and list the links on the page."*
 
 ## Use
 
@@ -164,17 +204,6 @@ or, by hand:
 - **Limits still hold.** A session started with `-allow-origin` gets back only the sign-ins of the sites it allows, and none for private addresses unless `-allow-private` is set. What a limit leaves out stays kept for a session allowed it.
 - **What is not kept.** Storage is kept for the site the agent is on when each call ends, not for a site it only passed through within a call, nor for a frame from another site. Storage is kept for up to 50 sites; the one used longest ago goes first. A site whose storage cannot be put back is reported to the agent as `event unrestored`, and the session starts without it; it stays kept.
 
-## What you can do with it
-
-- **Pull a table out of a page.** `table REF` returns rows as TSV, whatever the markup.
-- **See what the page calls.** `view net` lists the fetch and XHR requests behind it.
-- **Test your own web app.** Drive localhost the way a user would, with real page JavaScript running. Start Riffle with `-allow-private` so it may reach local addresses: `riffle mcp -allow-private` in your editor's entry, or `riffle serve -allow-private` from a shell, which takes the place of a Riffle already running without it, ending its sessions.
-- **Stay signed in between runs.** Sign in once with `-keep-state NAME`, and the agent is still signed in the next time the editor starts. See [Stay signed in](#stay-signed-in).
-
-Pages run in real time, as in any browser, and keep running while your agent thinks: a countdown, an expiring sign-in or a panel that opens later moves on between calls, and the next reply tells what changed.
-
-Riffle also says so when a step did not do what it asked, such as a form that was refused, so the agent can fix it and go on.
-
 ## Safe by default
 
 - Secrets are written as `$secret:name`, tied to one origin, and never shown back to the agent.
@@ -184,6 +213,18 @@ Riffle also says so when a step did not do what it asked, such as a form that wa
 - Local and private network addresses are off until you turn them on with `-allow-private`, so a page cannot send the agent into your network or a cloud metadata service.
 - Uploads and `eval` are off until you turn them on. `-allow-origin` and `-upload-dir` limit where a session can go and what it can send. A Riffle started without `-allow-private`, `-allow-origin`, `-allow-eval` or `-upload-dir`, from a shell or after a crash, keeps those it last ran with. Naming any of them sets all four, so `-allow-private=false` alone goes back to the defaults.
 - Sign-ins end with their session, unless you keep them with `-keep-state NAME`. Kept sign-ins are in a file only you can read; delete it to forget them. A session gets back only the sign-ins its limits allow.
+
+## Questions
+
+**Does anything leave my machine?** Only your agent's own requests to the sites it opens. Riffle has no telemetry, and its browser makes no update or sync calls of its own. Installing through `npx` fetches the package from npm.
+
+**Does it work on single-page apps?** Yes. The page's own JavaScript runs, and after each step Riffle waits until the page has answered and gone quiet.
+
+**Can it run headless, in CI or in a container?** Yes. The browser always runs headless. A signed image is published as `ghcr.io/noetive/riffle`; the [Dockerfile](Dockerfile) lists the run options Chrome's sandbox needs.
+
+**What does it cost?** Nothing. Riffle is open source under the ISC license.
+
+**What if two agents use it at once?** Each gets a browser of its own, up to four on the machine. One that needs another waits and is told which sessions hold them. See [Use](#use).
 
 ## What it isn't
 
