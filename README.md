@@ -7,7 +7,7 @@
   </picture>
 </h1>
 
-### Your agent uses the web as text, not screenshots.
+### A text-browser for agents that supports JS and uses minimal context
 
 **Riffle sends each page as text, then only what changed.<br>Your agent runs several steps per call, with no screenshots and no mouse.**
 
