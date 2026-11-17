@@ -1,6 +1,6 @@
 # @noetive/riffle
 
-Your agent uses the web as text, not screenshots. This package installs [Riffle](https://github.com/noetive/riffle) as an MCP server in your AI editor.
+A text-browser for agents that supports JS and uses minimal context. This package installs [Riffle](https://github.com/noetive/riffle) as an MCP server in your AI editor.
 
 ```bash
 npx @noetive/riffle init --client claude-code
