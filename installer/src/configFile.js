@@ -64,10 +64,12 @@ function restore(path, backup) {
   unlinkSync(backup);
 }
 
-// The changed region only: matching head and tail lines are elided.
+// The changed region only: matching head and tail lines are elided. A final
+// newline is ignored, since write adds one an editor may have left out, and
+// counting it would stop the tail from matching and print the rest of the file.
 function diff(before, after, path) {
-  const a = before.split("\n");
-  const b = after.split("\n");
+  const a = before.replace(/\n$/, "").split("\n");
+  const b = after.replace(/\n$/, "").split("\n");
   let head = 0;
   while (head < a.length && head < b.length && a[head] === b[head]) head += 1;
   let tail = 0;

@@ -78,6 +78,19 @@ test("dry run reports a diff and writes nothing", (t) => {
   assert.equal(existsSync(pathOf(ctx)), false);
 });
 
+// An editor may save its config without a final newline, and the installer
+// writes one. The dry-run diff must still show only the riffle entry: the rest
+// of an editor config can hold account details, and an agent running the
+// installer reads everything it prints.
+test("dry run shows only the changed entry when the file lacks a final newline", (t) => {
+  const { ctx } = sandbox(t);
+  const before = { mcpServers: { other: { command: "x" } }, account: { email: "someone@example.com" } };
+  put(pathOf(ctx), JSON.stringify(before, null, 2));
+  const result = install(spec, "user", ctx, { dryRun: true });
+  assert.match(result.diff, /\+.*riffle/);
+  assert.doesNotMatch(result.diff, /someone@example\.com/);
+});
+
 test("chrome option lands in the entry env", (t) => {
   const { ctx } = sandbox(t);
   install(spec, "user", ctx, { chrome: "/opt/chrome" });
