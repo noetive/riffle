@@ -17,9 +17,13 @@
 [![MCP server](https://img.shields.io/badge/MCP-server-5c4ee5?style=flat-square)](#install)
 [![License: ISC](https://img.shields.io/badge/license-ISC-f4c430?style=flat-square)](LICENSE)
 
-**[In numbers](#in-numbers) · [Why Riffle](#why-riffle) · [Install](#install) · [Use](#use) · [Safe by default](#safe-by-default) · [Questions](#questions) · [Releases](https://github.com/noetive/riffle/releases)**
+**[Why Riffle](#why-riffle) · [In numbers](#in-numbers) · [Install](#install) · [Use](#use) · [Safe by default](#safe-by-default) · [Questions](#questions) · [Releases](https://github.com/noetive/riffle/releases)**
 
-<code>npx @noetive/riffle init</code>
+Give your agent this prompt:
+
+```text
+Install the Riffle browser for yourself: run npx -y @noetive/riffle init --yes --client <claude-code, cursor, copilot, kiro or antigravity, whichever you run in>, check Chrome with npx -y @noetive/riffle doctor, then tell me to restart you.
+```
 
 <sub>Claude Code · Cursor · GitHub Copilot · Kiro · Antigravity · any MCP client</sub>
 
@@ -28,19 +32,6 @@
 ---
 
 Riffle is an MCP server and CLI. It runs Chrome with the page's JavaScript and hands your agent each page as text it can read and act on.
-
-## In numbers
-
-How much your agent reads back, compared with a tool that hands it the whole page after every action. Both columns are Riffle's own text, so the difference is only what Riffle leaves out.
-
-| Task | Whole page every time | With Riffle |
-| --- | --- | --- |
-| Close a cookie dialog over a small cart, then see the page | 1,158 characters | **208** (only what changed) |
-| Read a guide with 40 sections | 23,861 characters | **5,918** (default budget) |
-| The same guide at `budget=800` | 23,861 characters | **3,168** |
-| Sign in: dismiss cookies, fill two fields, submit, check the URL, read the result | 7 tool calls | **1 call** |
-
-Measured with Riffle 0.2.0 on generated pages served from localhost, so your pages will differ. Figures count characters, not tokens. What a budget leaves out is folded into lines your agent can expand, not dropped. The sign-in took about 5 seconds, including starting the browser. Check it on your own page: `riffle view outline` against `riffle view outline budget=100000`.
 
 ## Why Riffle
 
@@ -113,6 +104,19 @@ Your agent's next program closes the dialog first.
 | Fetching a page as Markdown | It can read, but it can't click, fill in or sign in | A real browser: click, fill in, sign in |
 | A browser test framework your agent scripts | Selectors and waits to write and keep working, a turn for every step | Steps named by on-page words, waits handled, several per call |
 
+## In numbers
+
+How much your agent reads back, compared with a tool that hands it the whole page after every action. Both columns are Riffle's own text, so the difference is only what Riffle leaves out.
+
+| Task | Whole page every time | With Riffle |
+| --- | --- | --- |
+| Close a cookie dialog over a small cart, then see the page | 1,158 characters | **208** (only what changed) |
+| Read a guide with 40 sections | 23,861 characters | **5,918** (default budget) |
+| The same guide at `budget=800` | 23,861 characters | **3,168** |
+| Sign in: dismiss cookies, fill two fields, submit, check the URL, read the result | 7 tool calls | **1 call** |
+
+Measured with Riffle 0.2.0 on generated pages served from localhost, so your pages will differ. Figures count characters, not tokens. What a budget leaves out is folded into lines your agent can expand, not dropped. The sign-in took about 5 seconds, including starting the browser. Check it on your own page: `riffle view outline` against `riffle view outline budget=100000`.
+
 ## What you can do with it
 
 - **Test your own web app.** Drive localhost the way a user would, with real page JavaScript running. Local addresses are off by default; put `riffle mcp -allow-private` in your editor's entry to allow them.
@@ -124,9 +128,22 @@ Pages run in real time, as in any browser, and keep running while your agent thi
 
 When a step runs but the page does not do what it asked, such as a form that refuses its input, the reply says so, and your agent can fix it and go on.
 
-Try it: `npx @noetive/riffle init`, then see [First run](#first-run).
+Try it: give your agent the prompt under [First run](#first-run).
 
 ## Install
+
+### First run
+
+1. Give your agent this prompt:
+
+   ```text
+   Install the Riffle browser for yourself: run npx -y @noetive/riffle init --yes --client <claude-code, cursor, copilot, kiro or antigravity, whichever you run in>, check Chrome with npx -y @noetive/riffle doctor, then tell me to restart you.
+   ```
+
+2. Restart your editor when the agent asks, so it loads Riffle.
+3. Ask your agent: *"Open example.com with Riffle and list the links on the page."*
+
+### By hand
 
 ```bash
 npx @noetive/riffle init --client claude-code
@@ -155,12 +172,6 @@ riffle doctor
 ```
 
 Riffle runs its own throwaway Chrome. It never touches your saved passwords or keychain, and it cleans up after itself when it stops.
-
-### First run
-
-1. Run `npx @noetive/riffle init`.
-2. Restart your editor so it loads Riffle.
-3. Ask your agent: *"Open example.com with Riffle and list the links on the page."*
 
 ## Use
 
