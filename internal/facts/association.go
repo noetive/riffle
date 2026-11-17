@@ -53,6 +53,7 @@ func (a *analyzer) association() {
 		}
 	}
 	a.explicitErrors(ctrls)
+	rowField := a.rowFields(ctrls, texts)
 
 	var labels, errs []pair
 	for _, c := range ctrls {
@@ -72,7 +73,10 @@ func (a *analyzer) association() {
 			if d, ok := a.labelDistance(c, t); ok && tone != ToneRed && !a.explicit[c] && (!titles || a.nodes[c].Name == "") && !tells {
 				labels = append(labels, pair{c, t, d})
 			}
-			if d, ok := a.errorDistance(c, t); ok && tone == ToneRed && !titles {
+			// Red text beside another field belongs to that field's row, such as
+			// the next cart line's price; it does not explain the field above.
+			onOtherRow := rowField[t] != snapshot.None && rowField[t] != c
+			if d, ok := a.errorDistance(c, t); ok && tone == ToneRed && !titles && !onOtherRow {
 				errs = append(errs, pair{c, t, d})
 			}
 		}
@@ -90,6 +94,27 @@ func (a *analyzer) association() {
 			a.nodes[p.ctrl].Error = p.text
 		}
 	}
+}
+
+// rowFields maps each candidate text to a field on its row within label reach
+// (160px either side), or None. An error message sits on a line of its own; a
+// text with a field beside it is part of that field's row.
+func (a *analyzer) rowFields(ctrls, texts []int32) map[int32]int32 {
+	const reach = 160.0
+	out := make(map[int32]int32, len(texts))
+	for _, t := range texts {
+		out[t] = snapshot.None
+		tb := a.s.Box[t]
+		for _, c := range ctrls {
+			cb := a.s.Box[c]
+			gap := math.Max(cb.X-(tb.X+tb.W), tb.X-(cb.X+cb.W))
+			if vOverlap(cb, tb) >= 0.5 && gap <= reach {
+				out[t] = c
+				break
+			}
+		}
+	}
+	return out
 }
 
 // hiddenBehind: the text sits under something painted over it, such as the

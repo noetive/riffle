@@ -272,6 +272,76 @@ func TestTwoFieldsWithTheirOwnLabels(t *testing.T) {
 	}
 }
 
+// TestRedTextOnAnotherFieldsRowIsNotAnError covers a list of rows that each
+// hold a red price and a field, such as a cart: the next row's price sits
+// directly below this row's field but belongs to its own row. Without the rule
+// the field reads error="€15", and the agent takes a price for a refusal.
+func TestRedTextOnAnotherFieldsRowIsNotAnError(t *testing.T) {
+	b := pb.New(1280, 800)
+	for k := range 3 {
+		base := b.El(b.Body(), "p", R(0, float64(500+k*30), 500, 20))
+		b.Text(base, "Ordinary text that forms the baseline of the page.")
+	}
+	f1 := b.El(b.Body(), "input", R(200, 100, 60, 24))
+	price := b.El(b.Body(), "span", R(180, 134, 40, 16), pb.Inline(), redText)
+	b.Text(price, "€15", pb.Box(R(180, 134, 40, 16)))
+	f2 := b.El(b.Body(), "input", R(260, 130, 60, 24))
+	p := analyze(b)
+	if p.Nodes[f1].Error != snapshot.None || p.Nodes[f2].Error != snapshot.None {
+		t.Errorf("errors %d %d, want none: the price shares a row with the second field", p.Nodes[f1].Error, p.Nodes[f2].Error)
+	}
+}
+
+// TestErrorBelowFieldWithAnotherFieldFurtherDown keeps the row rule narrow: an
+// error on a line of its own is still the error of the field above it when the
+// form goes on below.
+func TestErrorBelowFieldWithAnotherFieldFurtherDown(t *testing.T) {
+	b := pb.New(1280, 800)
+	for k := range 3 {
+		base := b.El(b.Body(), "p", R(0, float64(500+k*30), 500, 20))
+		b.Text(base, "Ordinary text that forms the baseline of the page.")
+	}
+	f1 := b.El(b.Body(), "input", R(200, 100, 100, 24))
+	msg := b.El(b.Body(), "span", R(200, 130, 100, 16), pb.Inline(), redText)
+	tx := b.Text(msg, "Required", pb.Box(R(200, 130, 100, 16)))
+	b.El(b.Body(), "input", R(200, 170, 100, 24))
+	// A field in a second column, level with the error but far across the page.
+	b.El(b.Body(), "input", R(700, 126, 100, 24))
+	if got := analyze(b).Nodes[f1].Error; got != tx {
+		t.Errorf("error = %d, want %d", got, tx)
+	}
+}
+
+// TestRowFieldReachBoundaries pins how close a field beside the red text must
+// be to claim it for its row: 160px, as far as a label reaches, on either side.
+// Measuring from the wrong edge would let a far column's field veto a real
+// error, or let a cart line's own field miss its price.
+func TestRowFieldReachBoundaries(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		other     snapshot.Rect
+		wantError bool
+	}{
+		{"right gap 160", R(400, 126, 60, 24), false},
+		{"right gap 161", R(401, 126, 60, 24), true},
+		{"left gap 160", R(-20, 126, 60, 24), false},
+		{"left gap 161", R(-21, 126, 60, 24), true},
+	} {
+		b := pb.New(1280, 800)
+		for k := range 3 {
+			base := b.El(b.Body(), "p", R(0, float64(500+k*30), 500, 20))
+			b.Text(base, "Ordinary text that forms the baseline of the page.")
+		}
+		f1 := b.El(b.Body(), "input", R(200, 100, 100, 24))
+		msg := b.El(b.Body(), "span", R(200, 130, 40, 16), pb.Inline(), redText)
+		tx := b.Text(msg, "€15", pb.Box(R(200, 130, 40, 16)))
+		b.El(b.Body(), "input", c.other)
+		if got := analyze(b).Nodes[f1].Error == tx; got != c.wantError {
+			t.Errorf("%s: error = %v, want %v", c.name, got, c.wantError)
+		}
+	}
+}
+
 func TestExplicitErrorMessage(t *testing.T) {
 	b := pb.New(1280, 800)
 	in := b.El(b.Body(), "input", R(200, 100, 100, 24), pb.Attr("aria-errormessage", "err"))
