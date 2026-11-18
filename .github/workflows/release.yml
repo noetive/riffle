@@ -166,8 +166,6 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
-          cache: npm
-          cache-dependency-path: installer/package-lock.json
 
       # Publishing authenticates with the workflow's OIDC identity (trusted
       # publishing, checked in preflight), which needs npm 11.5.1 or later and
@@ -179,9 +177,6 @@ jobs:
         with:
           name: binaries
           path: dist/
-
-      - run: npm ci --ignore-scripts
-        working-directory: installer
 
       # Every package carries the same version as the git tag, and the wrapper
       # pins its platform packages to exactly its own version. A drifting pair
@@ -261,6 +256,10 @@ jobs:
   # the right platform package, that package published, and the wrapper resolved
   # it. Gating the registry on this is the point: an npm mistake is recoverable
   # with a patch bump, a registry entry advertising a broken version is not.
+  #
+  # No macOS host: GitHub sometimes never assigns a hosted macOS runner, and the
+  # cancelled leg then holds the registry back until someone re-runs it. The
+  # macOS packages are built and mapped by the same steps these two hosts check.
   smoke:
     needs: [release, npm]
     runs-on: ${{ matrix.os }}
@@ -268,7 +267,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
