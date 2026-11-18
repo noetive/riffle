@@ -31,8 +31,8 @@ jobs:
   # The failure to expect is a package without that trust, or with a typo in it.
   # This job asks npm for a publish credential for every package exactly as
   # `npm publish` will, and discards what it gets. The `release` environment
-  # only runs for v* tags; only this job and npm name it, and both must, since
-  # the trust names it too.
+  # only runs for v* tags. This job and npm name it because npm's trust names
+  # it too; registry names it for its secret.
   preflight:
     environment: release
     runs-on: ubuntu-latest
@@ -392,6 +392,9 @@ jobs:
     # entry cannot be unpublished, so a prerelease would leave io.noetive/riffle
     # advertising an RC. A prerelease still exercises every stage before this.
     if: ${{ !contains(needs.release.outputs.version, '-') }}
+    # MCP_REGISTRY_PRIVATE_KEY is a secret of the `release` environment, which
+    # only v* tags may use, so a workflow pushed on a branch cannot read it.
+    environment: release
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
