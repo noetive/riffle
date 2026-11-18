@@ -23,42 +23,41 @@ concurrency:
 
 jobs:
   # Before anything is built or released: a GitHub Release cannot be unpublished
-  # cleanly, so a dead npm credential has to stop the run while nothing exists
-  # yet. npm publishes with the NPM_TOKEN secret, and a granular write token
-  # expires within 90 days, so this is the failure to expect.
+  # cleanly, so a package npm will not let this workflow publish has to stop the
+  # run while nothing exists yet.
   #
-  # NPM_TOKEN is a secret of the `release` environment, which only runs for v*
-  # tags: a workflow pushed on a branch cannot read it. Only this job and npm
-  # name the environment.
-  #
-  # whoami proves the token is live, not that it may publish: npm offers no way
-  # to ask whether it can write to the @noetive scope or bypasses two-factor
-  # authentication. Either gap fails at publish, after the GitHub Release
-  # exists; replace the secret and re-run the failed jobs.
+  # npm publishes through trusted publishing: no stored secret, each package
+  # trusts this repository, this workflow file and the `release` environment.
+  # The failure to expect is a package without that trust, or with a typo in it.
+  # This job asks npm for a publish credential for every package exactly as
+  # `npm publish` will, and discards what it gets. The `release` environment
+  # only runs for v* tags; only this job and npm name it, and both must, since
+  # the trust names it too.
   preflight:
     environment: release
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
+      id-token: write
     steps:
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
-
-      - name: Check the publish credential
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Keep the platform names in step with PLATFORMS in
+      # scripts/build-platform-packages.js.
+      - name: Every package trusts this workflow
         run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "::error title=NPM_TOKEN is not set::Add an npm granular access token with read and write on the @noetive scope and two-factor bypass enabled as the NPM_TOKEN secret of the release environment (Settings, Environments)."
-            exit 1
-          fi
-          npm whoami || {
-            echo "::error title=NPM_TOKEN is not valid::npm rejected the token. It is set but expired or revoked; replace the NPM_TOKEN secret of the release environment."
-            exit 1
-          }
+          failed=0
+          for name in @noetive/riffle @noetive/riffle-darwin-arm64 @noetive/riffle-darwin-x64 @noetive/riffle-linux-arm64 @noetive/riffle-linux-x64 @noetive/riffle-win32-x64; do
+            id_token=$(curl -fsS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm:registry.npmjs.org" | jq -r .value)
+            # Escaped the way npm escapes a scoped name: only the slash.
+            escaped="${name/\//%2f}"
+            if curl -fsS -X POST -H "Authorization: Bearer ${id_token}" "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/${escaped}" | jq -e '.token | length > 0' >/dev/null; then
+              echo "$name trusts this workflow."
+            else
+              echo "::error title=No trusted publisher for ${name}::On npmjs.com, open ${name}, Settings, Trusted Publisher, and add GitHub Actions with organization noetive, repository riffle, workflow release.yml, environment release. Then re-run this workflow."
+              failed=1
+            fi
+          done
+          exit "$failed"
 
   release:
     needs: preflight
@@ -170,10 +169,10 @@ jobs:
           cache: npm
           cache-dependency-path: installer/package-lock.json
 
-      # Publishing authenticates with NPM_TOKEN, checked in preflight. id-token
-      # stays granted for --provenance, which signs with the workflow's OIDC
-      # identity. Pinned rather than @latest so a bad npm release cannot break a
-      # release of this.
+      # Publishing authenticates with the workflow's OIDC identity (trusted
+      # publishing, checked in preflight), which needs npm 11.5.1 or later and
+      # attaches provenance on its own. Pinned rather than @latest so a bad npm
+      # release cannot break a release of this.
       - run: npm install -g npm@11.6.2
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -209,7 +208,7 @@ jobs:
             if npm view "$name@$VERSION" version --prefer-online >/dev/null 2>&1; then
               echo "$name@$VERSION is already published; skipping."
             else
-              npm publish --provenance --access public --tag "$NPM_TAG" "$dir"
+              npm publish --access public --tag "$NPM_TAG" "$dir"
             fi
             handled=$((handled + 1))
           done
@@ -220,7 +219,6 @@ jobs:
         env:
           VERSION: ${{ needs.release.outputs.version }}
           NPM_TAG: ${{ needs.release.outputs.npm_tag }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       # The gate before the one irreversible step in this job. Retried for five
       # minutes, like every other registry wait here: a publish can go live a
@@ -253,12 +251,11 @@ jobs:
             echo "@noetive/riffle@$VERSION is already published; skipping."
             exit 0
           fi
-          npm publish --provenance --access public --tag "$NPM_TAG"
+          npm publish --access public --tag "$NPM_TAG"
         working-directory: installer
         env:
           VERSION: ${{ needs.release.outputs.version }}
           NPM_TAG: ${{ needs.release.outputs.npm_tag }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   # Proves goreleaser stamped the binary correctly, the right binary landed in
   # the right platform package, that package published, and the wrapper resolved
