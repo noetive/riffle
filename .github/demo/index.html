@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Shop</title>
+<style>
+  body { font-family: sans-serif; margin: 2rem; }
+  .old { text-decoration: line-through; }
+  .new { color: #c00; }
+  .wall { position: fixed; inset: 0; background: rgba(0,0,0,.6); }
+  .wall [role=dialog] { position: fixed; top: 30%; left: 35%; width: 30%; padding: 1rem; background: #fff; }
+  .primary { background: #0d6efd; color: #fff; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Your cart</h1>
+  <ul>
+    <li>Trail shoe 42 <span class="old">€89</span> <span class="new">€69</span>
+      <label>Qty <input type="number" value="1" min="1"></label></li>
+  </ul>
+  <button id="checkout">Checkout</button>
+  <p id="status"></p>
+</main>
+<div class="wall" id="wall">
+  <div role="dialog" aria-label="Cookie preferences">
+    <h2>Cookie preferences</h2>
+    <p>We use cookies.</p>
+    <button class="primary" onclick="wall.remove()">Accept all</button>
+    <button onclick="wall.remove()">Reject</button>
+  </div>
+</div>
+<script>
+  checkout.onclick = () => { document.getElementById("status").textContent = "Order placed"; };
+</script>
+</body>
+</html>

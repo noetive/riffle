@@ -33,6 +33,10 @@ Install the Riffle browser for yourself: run npx -y @noetive/riffle init --yes -
 
 Riffle is an MCP server and CLI. It runs Chrome with the page's JavaScript and hands your agent each page as text it can read and act on.
 
+<p align="center">
+  <img alt="A Riffle session in a terminal: a shop page read as text, a click refused because a cookie dialog covers the button, the dialog closed with a reply listing only what changed, then three steps in one call" src=".github/demo/riffle.gif" width="800">
+</p>
+
 ## Why Riffle
 
 Most browser tools fill your agent's context with screenshots or whole-page snapshots and spend a turn on every click. Riffle changes four things.
